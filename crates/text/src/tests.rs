@@ -40,6 +40,14 @@ fn bundled_fonts_cover_latin() {
 }
 
 #[test]
+fn registering_fonts_moves_the_generation() {
+    let mut e = TextEngine::new();
+    let g = fonts::generation();
+    e.fonts.register_font_data(fonts::INTER_REGULAR.to_vec());
+    assert!(fonts::generation() > g);
+}
+
+#[test]
 fn metrics_are_stable_and_scale_with_dpi() {
     let mut e = TextEngine::new();
     let a = e.layout(&point("Hamburgefonstiv", 12.0), 72.0);
@@ -557,6 +565,96 @@ fn txt2_carries_optical_kerning() {
     let mut l = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
     crate::psd::apply_txt2(&mut l, &tysh, &txt2);
     assert!(l.char_runs().iter().all(|r| r.style.kerning == Kerning::Optical));
+}
+
+/// A `Txt2` written by [`crate::psd::build_txt2`] (what PSD export writes for the type layers)
+/// restores every auto-kern mode on import (#1348: a new Optical layer used to reopen as
+/// Metrics, because EngineData's `AutoKerning true` covers both).
+#[test]
+fn build_txt2_round_trips_kerning_modes() {
+    use photocraft_doc::text::Kerning;
+    let style = |kerning: Kerning, kern: f32| CharStyle { kerning, kern, ..Default::default() };
+    let t = runs_of("AVAT", &[(2, style(Kerning::Optical, 0.0)), (1, style(Kerning::Metrics, 0.0)), (1, style(Kerning::Off, 0.0))]);
+    let tysh = with_text_index(&crate::psd::build_tysh(&t, 72.0, None), 0);
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    assert!(
+        back.char_runs().iter().all(|r| r.style.kerning != Kerning::Optical),
+        "EngineData alone can't say Optical: {:?}",
+        back.char_runs().iter().map(|r| r.style.kerning).collect::<Vec<_>>()
+    );
+    let txt2 = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], None)).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &txt2);
+    let modes: Vec<(usize, Kerning)> = back.char_runs().iter().map(|r| (r.len, r.style.kerning)).collect();
+    assert_eq!(modes, vec![(2, Kerning::Optical), (1, Kerning::Metrics), (1, Kerning::Off)]);
+    // A manual kern (a nonzero pair value) is the manual mode, as in the EngineData pair fields.
+    let manual = runs_of("AB", &[(1, style(Kerning::Metrics, 50.0)), (1, style(Kerning::Metrics, 0.0))]);
+    let tysh = with_text_index(&crate::psd::build_tysh(&manual, 72.0, None), 0);
+    let mut back = crate::psd::text_layer_from_tysh(&tysh, 72.0).unwrap();
+    let txt2 = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &manual)], None)).unwrap();
+    crate::psd::apply_txt2(&mut back, &tysh, &txt2);
+    let modes: Vec<(usize, Kerning)> = back.char_runs().iter().map(|r| (r.len, r.style.kerning)).collect();
+    assert_eq!(modes, vec![(1, Kerning::Off), (1, Kerning::Metrics)]);
+}
+
+/// A kept `Txt2` object — same text, so its extras are still true — keeps everything the file
+/// held beyond the regenerated keys (Photoshop stores glyph pen positions under `/21 /1`), and a
+/// changed text drops those extras with the stale runs. The block's own extras always survive.
+#[test]
+fn txt2_keeps_a_kept_objects_extras_and_drops_them_with_its_text() {
+    use crate::engine_data::Value as E;
+    use photocraft_doc::text::Kerning;
+    let style = |kerning: Kerning, kern: f32| CharStyle { kerning, kern, ..Default::default() };
+    // The file's block: object 0 with `/21 /1` pen positions, a model extra, and a block extra.
+    let obj = E::Dict(vec![
+        (
+            "0".into(),
+            E::Dict(vec![("0".into(), E::String("AB\r".into())), ("6".into(), E::Dict(vec![("0".into(), E::Array(vec![]))])), ("keep".into(), E::Int(7))]),
+        ),
+        ("21".into(), E::Dict(vec![("1".into(), E::Array(vec![E::Real(1.5), E::Real(2.5)]))])),
+    ]);
+    let prev = crate::engine_data::write_bare(&[
+        ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
+        ("0".into(), E::dict()),
+        ("1".into(), E::Dict(vec![("1".into(), E::Array(vec![obj]))])),
+        ("extra".into(), E::Int(3)),
+    ]);
+    // Same text: the extras survive, the style runs are ours.
+    let t = runs_of("AB", &[(1, style(Kerning::Optical, 0.0)), (1, style(Kerning::Metrics, 0.0))]);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    assert_eq!(out.get("extra").and_then(E::as_i64), Some(3), "block extras survive");
+    let object = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
+    assert_eq!(object.path(&["21", "1"]).and_then(E::as_array).map(|items| items.len()), Some(2), "pen positions survive an unchanged text");
+    assert_eq!(object.path(&["0", "keep"]).and_then(E::as_i64), Some(7), "model extras survive");
+    assert_eq!(object.path(&["0", "6", "0"]).and_then(E::as_array).map(|items| items.len()), Some(2), "the style runs are regenerated");
+    // Changed text: the extras go stale with the old runs and are dropped.
+    let t = runs_of("XY", &[(1, style(Kerning::Optical, 0.0)), (1, style(Kerning::Metrics, 0.0))]);
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(0, &t)], Some(&prev))).unwrap();
+    assert_eq!(out.get("extra").and_then(E::as_i64), Some(3), "block extras survive a text change too");
+    let object = out.path(&["1", "1"]).and_then(E::as_array).unwrap()[0].clone();
+    assert!(object.get("21").is_none(), "pen positions of another text are dropped: {:?}", object.get("21"));
+    assert!(object.path(&["0", "keep"]).is_none(), "model extras of another text are dropped");
+}
+
+/// A file-controlled `TextIndex` must not size the save: out-of-range numbers are ignored (the
+/// slot array is sized by real text objects, never by a file's numbers) and reading one back is
+/// a no-op, so a hostile file degrades instead of allocating gigabytes on export.
+#[test]
+fn hostile_text_index_is_ignored_not_sized() {
+    use crate::engine_data::Value as E;
+    let t = runs_of("AB", &[(2, CharStyle::default())]);
+    let tysh = crate::psd::build_tysh(&t, 72.0, None);
+    assert_eq!(crate::psd::text_index(&crate::psd::set_text_index(&tysh, 0).unwrap()), Some(0));
+    assert_eq!(crate::psd::text_index(&crate::psd::set_text_index(&tysh, crate::psd::MAX_TEXT_INDEX).unwrap()), Some(crate::psd::MAX_TEXT_INDEX));
+    for hostile in [crate::psd::MAX_TEXT_INDEX + 1, i32::MAX] {
+        assert_eq!(crate::psd::text_index(&crate::psd::set_text_index(&tysh, hostile).unwrap()), None, "{hostile}");
+        let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(hostile, &t)], None)).unwrap();
+        let slots = out.path(&["1", "1"]).and_then(E::as_array).unwrap();
+        assert!(slots.is_empty(), "{hostile} sized {} slots", slots.len());
+    }
+    // The bound is real but generous: the last honoured number lands at its slot.
+    let out = crate::psd::parse_txt2(&crate::psd::build_txt2(&[(crate::psd::MAX_TEXT_INDEX, &t)], None)).unwrap();
+    let slots = out.path(&["1", "1"]).and_then(E::as_array).unwrap();
+    assert_eq!(slots.len(), crate::psd::MAX_TEXT_INDEX as usize + 1);
 }
 
 /// Photopea needs an enabled fill, not just FillColor, to paint text after an edit. Inspect the

@@ -46,39 +46,6 @@ fn can_revert(s: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
-fn can_reveal(s: &Session) -> std::result::Result<(), String> {
-    native(s)?;
-    if s.documents().is_empty() {
-        return Err("no document open".into());
-    }
-    if s.documents().iter().any(|d| d.path.as_deref().is_some_and(is_file)) { Ok(()) } else { Err("the document has never been saved".into()) }
-}
-
-/// Show the document's file in the platform file manager (Finder / Explorer / Files).
-fn reveal_in_file_manager(s: &mut Session, p: &Value) -> Result<Value> {
-    native(s).map_err(EngineError::Other)?;
-    let i = match p.get("document").and_then(Value::as_u64) {
-        Some(n) => usize::try_from(n).map_err(|_| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: "`document` out of range".into() })?,
-        None => s.active_index().ok_or(EngineError::NoDocument)?,
-    };
-    let path = s
-        .documents()
-        .get(i)
-        .ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
-        .path
-        .clone()
-        .ok_or_else(|| EngineError::Other("the document has never been saved".into()))?;
-    if !is_file(&path) {
-        return Err(EngineError::Other(format!("{path} is not a file on disk")));
-    }
-    let (program, args) = crate::layer_menu_cmds::reveal_command(&path);
-    if p.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
-        return Ok(json!({"program": program, "args": args, "path": path}));
-    }
-    crate::layer_menu_cmds::spawn(program, &args)?;
-    Ok(json!({"path": path}))
-}
-
 fn has_adjustments(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     if d.doc.layers.iter().any(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))) {
@@ -968,10 +935,53 @@ fn layers_to_files(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"files": files}))
 }
 
-/// The document's visible top-level adjustment layers applied to an identity lattice, as a
-/// `.cube` 3D LUT (red fastest, values 0–1).
-pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
-    let n = size.clamp(2, 256);
+/// Adjustment layers that can be represented as an RGB-only LUT, in document stack order.
+/// A LUT has no spatial coordinates, so masks and clipping geometry are deliberately stripped
+/// at bake time. Group adjustments need their enclosing group's compositing semantics and are
+/// not silently flattened as independent layers.
+fn lut_layers<'a>(doc: &'a Document, ids: Option<&[LayerId]>) -> Result<Vec<&'a Layer>> {
+    const CMD: &str = "file.export.colorLookupTables";
+    let mut selected = Vec::new();
+    if let Some(ids) = ids {
+        if ids.is_empty() {
+            return Err(EngineError::BadParams { cmd: CMD.into(), msg: "select at least one adjustment layer".into() });
+        }
+        for id in ids {
+            if selected.contains(id) {
+                return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("duplicate layer id {}", id.0) });
+            }
+            let Some(layer) = doc.layer(*id) else { return Err(EngineError::NoLayer(*id)) };
+            if !matches!(layer.content, LayerContent::Adjustment(_)) {
+                return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("layer {} is not an adjustment layer", id.0) });
+            }
+            if !layer.visible {
+                return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("layer {} is hidden", id.0) });
+            }
+            if !doc.layers.iter().any(|root| root.id == *id) {
+                return Err(EngineError::BadParams {
+                    cmd: CMD.into(),
+                    msg: format!("layer {} is nested in a group; export top-level adjustment layers", id.0),
+                });
+            }
+            selected.push(*id);
+        }
+    }
+    let mut layers = Vec::new();
+    for l in &doc.layers {
+        if l.visible && matches!(l.content, LayerContent::Adjustment(_)) && (ids.is_none() || selected.contains(&l.id)) {
+            layers.push(l);
+        }
+    }
+    if layers.is_empty() {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: "no visible adjustment layers to export".into() });
+    }
+    Ok(layers)
+}
+
+/// Bake the chosen adjustment stack against an identity RGB lattice.
+/// Source order always follows the document stack, even if an explicit list is reversed.
+fn bake_cube_layers(size: usize, title: &str, layers: &[&Layer]) -> String {
+    let n = size;
     let (w, h) = ((n * n) as u32, n as u32);
     let mut lattice = Document::new("lut", photocraft_doc::Size::new(w, h), ColorMode::Rgb, photocraft_color::SampleType::F32);
     let fmt = lattice.pixel_format();
@@ -989,8 +999,8 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
     let mut surf = Surface::new(fmt);
     surf.write_region(Rect::new(0, 0, w as i32, h as i32), &data);
     lattice.layers.push(Layer::new("Lattice", LayerContent::Raster(surf)));
-    for l in doc.layers.iter().filter(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))) {
-        let mut a = l.clone();
+    for l in layers {
+        let mut a = (*l).clone();
         // Masks and clipping are spatial; a LUT is the adjustment stack's colour mapping.
         a.mask = None;
         a.vector_mask = None;
@@ -1012,17 +1022,58 @@ pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
     s
 }
 
+/// Backwards-compatible helper for exporting all visible top-level adjustments.
+pub fn bake_cube(doc: &Document, size: usize, title: &str) -> String {
+    let layers: Vec<&Layer> = doc.layers.iter().filter(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))).collect();
+    bake_cube_layers(size.clamp(2, photocraft_cms::lutfile::MAX_SIZE), title, &layers)
+}
+
+/// Export either the whole visible stack (backward-compatible default), the Layers panel's
+/// current selection, or an explicit list supplied by scripts/CLI/automation.
 fn color_lookup_tables(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "file.export.colorLookupTables";
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    let size = p.get("size").and_then(Value::as_u64).unwrap_or(33) as usize;
+    let size = match p.get("size") {
+        None | Some(Value::Null) => 33,
+        Some(v) => v.as_u64().ok_or_else(|| EngineError::BadParams { cmd: CMD.into(), msg: "size must be an integer".into() })?,
+    };
+    if !(2..=photocraft_cms::lutfile::MAX_SIZE as u64).contains(&size) {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: format!("size must be 2..={}", photocraft_cms::lutfile::MAX_SIZE) });
+    }
+    let scope = match p.get("scope") {
+        None | Some(Value::Null) => "all",
+        Some(Value::String(s)) => s.as_str(),
+        Some(_) => return Err(EngineError::BadParams { cmd: CMD.into(), msg: "scope must be all or selected".into() }),
+    };
+    if !matches!(scope, "all" | "selected") {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: "scope must be all or selected".into() });
+    }
+    if p.get("layers").is_some() && scope == "selected" {
+        return Err(EngineError::BadParams { cmd: CMD.into(), msg: "use either layers or scope=selected, not both".into() });
+    }
+    let explicit: Option<Vec<LayerId>> = if let Some(v) = p.get("layers") {
+        let Some(a) = v.as_array() else { return Err(EngineError::BadParams { cmd: CMD.into(), msg: "layers must be an array of layer IDs".into() }) };
+        let mut out = Vec::with_capacity(a.len());
+        for id in a {
+            let Some(id) = id.as_u64() else { return Err(EngineError::BadParams { cmd: CMD.into(), msg: "layer IDs must be unsigned integers".into() }) };
+            out.push(LayerId(id));
+        }
+        Some(out)
+    } else if scope == "selected" {
+        Some(d.selected_layers())
+    } else {
+        None
+    };
+    let layers = lut_layers(&d.doc, explicit.as_deref())?;
+    let count = layers.len();
     let title = p.get("title").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&d.doc.name));
-    let cube = bake_cube(&d.doc, size, &title);
+    let cube = bake_cube_layers(size as usize, &title, &layers);
     match p.get("path").and_then(Value::as_str) {
         Some(path) => {
             write_file(path, cube.as_bytes())?;
-            Ok(json!({"path": path, "size": size.clamp(2, 256)}))
+            Ok(json!({"path": path, "size": size, "layerCount": count}))
         }
-        None => Ok(json!({"cube": cube, "size": size.clamp(2, 256)})),
+        None => Ok(json!({"cube": cube, "size": size, "layerCount": count})),
     }
 }
 
@@ -1165,16 +1216,23 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             close_others
         ),
-        CommandSpec {
-            id: "file.revealInFinder",
-            label: "Reveal in Finder",
-            menu: &[],
-            shortcut: None,
-            params: r##"{"document":index?,"dryRun":bool=false}"##,
-            enabled: can_reveal,
-            run: reveal_in_file_manager,
-            journal: false,
-        },
+        // The document tab's menu (UI-217-6): the tab's own file in the platform file manager.
+        // Not a Photoshop menu-bar item; enabled when the target document has a saved path.
+        spec!("file.revealInFinder", "Reveal in Finder", &[], None, r##"{"document":index? (default active),"dryRun":bool=false}"##, native_doc, |s, p| {
+            let i = match p.get("document") {
+                Some(v) => v
+                    .as_u64()
+                    .and_then(|v| usize::try_from(v).ok())
+                    .ok_or_else(|| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: "`document` must be an index".into() })?,
+                None => s.active_index().ok_or(EngineError::NoDocument)?,
+            };
+            let path = s
+                .documents()
+                .get(i)
+                .and_then(|d| d.path.clone())
+                .ok_or_else(|| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: format!("document {i} has no saved file") })?;
+            crate::layer_menu_cmds::reveal(&path, p.get("dryRun").and_then(Value::as_bool).unwrap_or(false))
+        }),
         spec!("file.revert", "Revert", &["File"], Some("F12"), "{} (reloads the saved file as one undoable step)", can_revert, |s, _| revert(s)),
         spec!(
             "file.saveACopy",
@@ -1284,7 +1342,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Color Lookup Tables…",
             &["File", "Export"],
             None,
-            r##"{"path":str? (.cube; omit to return the text),"size":2..256=33,"title":str?}"##,
+            r##"{"path":str? (.cube; omit to return the text),"size":2..129=33,"title":str?,"scope":"all|selected"="all","layers":[id,…]?} (selected layer IDs use original document stacking; masks are spatial and omitted)"##,
             has_adjustments,
             color_lookup_tables
         ),

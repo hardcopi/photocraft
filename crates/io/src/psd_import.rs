@@ -270,7 +270,7 @@ impl Ctx<'_> {
         let content = if let Some(k) = adj_key {
             let data = rec.block(k).map(|b| b.data.clone()).unwrap_or_default();
             let cged = rec.block(b"CgEd").map(|b| &b.data[..]);
-            LayerContent::Adjustment(adjust_map::parse(
+            let adj = adjust_map::parse(
                 k,
                 &data,
                 cged,
@@ -281,7 +281,17 @@ impl Ctx<'_> {
                     ColorMode::Lab => adjust_map::Channels::Lab,
                     _ => adjust_map::Channels::Other,
                 },
-            ))
+            );
+            // Kept verbatim for saving, but it renders as nothing: say so rather than open the
+            // layer silently without its effect (#1763).
+            if matches!(adj, photocraft_doc::Adjustment::Unsupported { .. }) {
+                let why = adjust_map::unreadable_reason(k, &data).map(|r| format!(" ({r})")).unwrap_or_default();
+                self.warn(format!(
+                    "layer \"{name}\": its {} settings could not be read{why}; the layer is kept as saved but has no effect",
+                    adjust_map::label(k)
+                ));
+            }
+            LayerContent::Adjustment(adj)
         } else if rec.block(b"TySh").is_some() {
             // Typed model from TySh/EngineData (photocraft-text); Photoshop's pixels stay the cache.
             let data = rec.block(b"TySh").map(|b| b.data.clone()).unwrap_or_default();

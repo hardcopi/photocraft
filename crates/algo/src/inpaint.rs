@@ -520,7 +520,15 @@ pub fn complete_with(
 /// hole. `None` if no displacement fits.
 pub fn best_offset(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], ring: usize, max_radius: i32) -> Option<(i32, i32)> {
     let (bx0, by0, bx1, by1) = hole_bbox(w, h, hole)?;
-    let ring = ring.max(1) as i32;
+    // No valid translation can move farther than the source image's extent.
+    // Bound arbitrary public API inputs before constructing i32 search ranges:
+    // usize -> i32 truncation and signed increments otherwise overflow or hang.
+    let extent = w.max(h).min((i32::MAX / 4) as usize) as i32;
+    let max_radius = max_radius.max(0).min(extent);
+    if max_radius == 0 {
+        return None;
+    }
+    let ring = ring.max(1).min(extent as usize) as i32;
     let hs = integral(w, h, hole);
     // Sample points: the hole's ring (dilated minus hole), subsampled for speed.
     let mut pts = Vec::new();
@@ -553,7 +561,7 @@ pub fn best_offset(w: usize, h: usize, ch: usize, img: &[f32], hole: &[bool], ri
             }
         }
         // Mild preference for nearer sources on ties.
-        Some(e / pts.len().max(1) as f32 * (1.0 + 1e-3 * ((dx * dx + dy * dy) as f32).sqrt() / max_radius.max(1) as f32))
+        Some(e / pts.len().max(1) as f32 * (1.0 + 1e-3 * ((dx as f32).hypot(dy as f32) / max_radius as f32)))
     };
     // Coarse grid over the search window, then a full-resolution refinement around the winner.
     let step = (max_radius / 24).max(1);
@@ -737,6 +745,21 @@ mod tests {
         let (dx, dy) = best_offset(w, h, ch, &img, &hole, 3, 20).unwrap();
         assert_eq!(dx.rem_euclid(10), 0, "dx {dx} dy {dy}");
         assert!((dx, dy) != (0, 0));
+    }
+
+    #[test]
+    fn proximity_search_clamps_hostile_radii_without_overflow_or_hanging() {
+        let (w, h, ch) = (24, 20, 1);
+        let img: Vec<f32> = (0..w * h).map(|i| (i % w) as f32 / w as f32).collect();
+        let hole = disc(w, h, 12.0, 10.0, 2.0);
+        // User-supplied values used to overflow i32 loops, cast a huge usize
+        // ring into a negative number, or take billions of search iterations.
+        let result = best_offset(w, h, ch, &img, &hole, usize::MAX, i32::MAX);
+        if let Some((dx, dy)) = result {
+            assert!(dx.abs() <= w as i32 && dy.abs() <= h as i32);
+        }
+        assert_eq!(best_offset(w, h, ch, &img, &hole, 2, -1), None);
+        assert_eq!(best_offset(w, h, ch, &img, &hole, 2, 0), None);
     }
 
     #[test]

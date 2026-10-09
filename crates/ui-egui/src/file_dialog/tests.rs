@@ -32,13 +32,68 @@ fn answer(open: &Open, answer: Option<FileDialogAnswer>) {
 }
 
 #[test]
+fn open_starts_in_the_last_used_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    app.ui.recent_files = vec!["/pics/cat.psd".into(), "/old/dog.png".into()];
+    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(
+        matches!(open.borrow().as_slice(), [(FileDialogRequest::Open { multiple: true, initial_dir: Some(dir) }, _)] if dir == "/pics"),
+        "{:?}",
+        open.borrow().first().map(|(r, _)| r.clone())
+    );
+}
+
+#[test]
+fn last_used_dir_takes_the_most_recent_parent() {
+    assert_eq!(last_used_dir(&[]), None);
+    assert_eq!(last_used_dir(&["/pics/cat.psd".into()]), Some("/pics".into()));
+    assert_eq!(last_used_dir(&["/pics/cat.psd".into(), "/old/dog.png".into()]), Some("/pics".into()));
+    assert_eq!(last_used_dir(&["cat.psd".into()]), None, "no folder to start in");
+    assert_eq!(last_used_dir(&["/".into()]), None, "the root has no parent");
+}
+
+#[test]
+fn open_and_save_remember_the_last_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo("/work/shots/out.psd".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_save_dir, "/work/shots");
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => {
+            assert_eq!(std::path::Path::new(suggested).parent(), Some(std::path::Path::new("/work/shots")));
+        }
+        other => panic!("expected save, got {other:?}"),
+    }
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Paths(vec!["/pics/cat.psd".into()])));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_open_dir, "/pics");
+    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    match &open.borrow()[0].0 {
+        FileDialogRequest::Open { initial_dir, .. } => assert_eq!(initial_dir.as_deref(), Some("/pics")),
+        other => panic!("expected open, got {other:?}"),
+    }
+}
+
+#[test]
 fn the_app_keeps_running_while_a_dialog_is_open() {
     let (mut app, open, written) = app();
     let ctx = egui::Context::default();
     assert_eq!(menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap(), json!({"fileDialog": "save"}));
     assert!(open.borrow().is_empty(), "shown at the end of the frame, which has the window to parent it to");
     app.poll_file_dialog(&ctx, None);
-    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested, .. }, _)] if suggested.ends_with(".psd")));
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested.ends_with(".psd")));
     // Frames go on while the user is in the dialog: nothing is written, commands still run, and
     // a second dialog is refused.
     for _ in 0..3 {
@@ -66,32 +121,44 @@ fn the_app_keeps_running_while_a_dialog_is_open() {
 }
 
 #[test]
-fn open_and_save_remember_the_last_folder() {
+fn save_and_export_dialogs_start_beside_the_document() {
     let (mut app, open, _) = app();
     let ctx = egui::Context::default();
-    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::SaveTo("/work/shots/out.psd".into())));
-    app.poll_file_dialog(&ctx, None);
-    assert_eq!(app.session.prefs().file_handling.last_save_dir, "/work/shots");
-    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    match &open.borrow()[0].0 {
-        FileDialogRequest::Save { directory, .. } => assert_eq!(directory.as_deref(), Some("/work/shots")),
-        other => panic!("expected save, got {other:?}"),
+    let dir = std::env::temp_dir().join("PhotoCraft projects").join("图像");
+    let source = dir.join("original.psd");
+    app.session.active_mut().unwrap().path = Some(source.to_string_lossy().into_owned());
+    for command in ["file.saveAs", "file.export.exportAs", "file.export.saveForWebLegacy"] {
+        let r = menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        if let Some(id) = r["dialog"].as_u64() {
+            crate::dialogs::confirm(&mut app, id).unwrap();
+        }
+        app.poll_file_dialog(&ctx, None);
+        {
+            let held = open.borrow();
+            let (FileDialogRequest::Save { suggested }, _) = &held[0] else { panic!("save dialog expected") };
+            assert_eq!(std::path::Path::new(suggested).parent(), Some(dir.as_path()), "{command}");
+            if command == "file.saveAs" {
+                assert_eq!(std::path::Path::new(suggested), source);
+            }
+        }
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
     }
-    answer(&open, None);
-    app.poll_file_dialog(&ctx, None);
-    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    answer(&open, Some(FileDialogAnswer::Paths(vec!["/pics/cat.psd".into()])));
-    app.poll_file_dialog(&ctx, None);
-    assert_eq!(app.session.prefs().file_handling.last_open_dir, "/pics");
-    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
-    app.poll_file_dialog(&ctx, None);
-    match &open.borrow()[0].0 {
-        FileDialogRequest::Open { directory, .. } => assert_eq!(directory.as_deref(), Some("/pics")),
-        other => panic!("expected open, got {other:?}"),
+}
+
+#[test]
+fn save_suggestions_preserve_explicit_directories_and_untitled_names() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    for (document_path, suggested) in
+        [(None, "Untitled.png"), (Some("project/source.psd"), "exports/result.png"), (Some("project/source.psd"), "/other/result.png")]
+    {
+        app.session.active_mut().unwrap().path = document_path.map(str::to_string);
+        app.pick_save(suggested, |_, _| Ok(Value::Null)).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested: actual } if actual == suggested));
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
     }
 }
 

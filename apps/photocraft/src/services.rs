@@ -21,6 +21,16 @@ const OPEN_EXTS: &[&str] = &[
     "afdesign", "afphoto", "afpub",
 ];
 
+/// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
+/// On Linux and the BSDs rfd turns each extension into a case-sensitive `*.ext` glob for the XDG
+/// portal or zenity, so every letter becomes a character class, as the portal spec suggests
+/// (`*.[iI][cC][oO]`). Windows and macOS take literal extensions and ignore case already.
+fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
+    let case_sensitive_globs = cfg!(all(unix, not(target_os = "macos")));
+    let class = |c: char| if c.is_ascii_alphabetic() { format!("[{}{}]", c.to_ascii_lowercase(), c.to_ascii_uppercase()) } else { c.to_string() };
+    extensions.iter().map(|ext| if case_sensitive_globs { ext.chars().map(class).collect() } else { ext.to_string() }).collect()
+}
+
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
 /// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
 /// keeps defaulting to Photoshop.
@@ -76,11 +86,11 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         dialog = dialog.set_parent(parent);
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
-        FileDialogRequest::Open { multiple, directory } => {
-            if let Some(dir) = directory.as_ref().filter(|d| Path::new(d).is_dir()) {
+        FileDialogRequest::Open { multiple, initial_dir } => {
+            if let Some(dir) = initial_dir.as_ref().filter(|d| Path::new(d).is_dir()) {
                 dialog = dialog.set_directory(dir);
             }
-            let dialog = dialog.add_filter("All Formats", OPEN_EXTS).add_filter("PhotoCraft", &["pcraft"]);
+            let dialog = dialog.add_filter("All Formats", &open_filter_extensions(OPEN_EXTS)).add_filter("PhotoCraft", &open_filter_extensions(&["pcraft"]));
             if multiple {
                 let picked = dialog.pick_files();
                 Box::pin(async move { picked.await.map(|files| FileDialogAnswer::Paths(files.iter().map(path_of).collect())) })
@@ -89,15 +99,15 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 Box::pin(async move { picked.await.map(|file| FileDialogAnswer::Paths(vec![path_of(&file)])) })
             }
         }
-        FileDialogRequest::Save { suggested, directory } => {
-            if let Some(dir) = directory.as_ref().filter(|d| Path::new(d).is_dir()) {
-                dialog = dialog.set_directory(dir);
-            }
+        FileDialogRequest::Save { suggested } => {
             for (name, exts) in save_filters(&suggested) {
                 dialog = dialog.add_filter(name, &exts);
             }
             if let Some(name) = Path::new(&suggested).file_name() {
                 dialog = dialog.set_file_name(name.to_string_lossy());
+            }
+            if let Some(dir) = Path::new(&suggested).parent().filter(|p| !p.as_os_str().is_empty()) {
+                dialog = dialog.set_directory(dir);
             }
             let picked = dialog.save_file();
             Box::pin(async move { picked.await.map(|file| FileDialogAnswer::SaveTo(path_of(&file))) })
@@ -163,22 +173,19 @@ fn kdialog_filter() -> String {
 /// kdialog argv after the program name.
 fn kdialog_args(request: &FileDialogRequest) -> Vec<String> {
     match request {
-        FileDialogRequest::Open { multiple, directory } => {
+        FileDialogRequest::Open { multiple, initial_dir } => {
             let mut args = Vec::new();
             if *multiple {
                 args.extend(["--multiple".into(), "--separate-output".into()]);
             }
             args.push("--getopenfilename".into());
-            let start = directory.as_ref().filter(|d| Path::new(d).is_dir()).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+            let start = initial_dir.as_ref().filter(|d| Path::new(d).is_dir()).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
             args.push(start);
             args.push(kdialog_filter());
             args
         }
-        FileDialogRequest::Save { suggested, directory } => {
-            let path = match directory.as_ref().filter(|d| Path::new(d).is_dir()) {
-                Some(dir) if !Path::new(suggested).is_absolute() => Path::new(dir).join(Path::new(suggested).file_name().unwrap_or(suggested.as_ref())),
-                _ => PathBuf::from(suggested),
-            };
+        FileDialogRequest::Save { suggested } => {
+            let path = PathBuf::from(suggested);
             let filters: Vec<String> = save_filters(suggested)
                 .into_iter()
                 .map(|(name, exts)| format!("{}|{name}", exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")))
@@ -192,7 +199,7 @@ fn kdialog_args(request: &FileDialogRequest) -> Vec<String> {
 fn zenity_args(request: &FileDialogRequest) -> Vec<String> {
     let mut args = vec!["--file-selection".into(), "--separator".into(), "|".into()];
     match request {
-        FileDialogRequest::Open { multiple, directory } => {
+        FileDialogRequest::Open { multiple, initial_dir } => {
             if *multiple {
                 args.push("--multiple".into());
             }
@@ -200,22 +207,19 @@ fn zenity_args(request: &FileDialogRequest) -> Vec<String> {
             args.push(format!("All Formats | {}", OPEN_EXTS.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")));
             args.push("--file-filter".into());
             args.push("PhotoCraft | *.pcraft".into());
-            if let Some(dir) = directory.as_ref().filter(|d| Path::new(d).is_dir()) {
+            if let Some(dir) = initial_dir.as_ref().filter(|d| Path::new(d).is_dir()) {
                 args.push("--filename".into());
                 args.push(format!("{}/", dir.trim_end_matches('/')));
             }
         }
-        FileDialogRequest::Save { suggested, directory } => {
+        FileDialogRequest::Save { suggested } => {
             args.push("--save".into());
             args.push("--confirm-overwrite".into());
             for (name, exts) in save_filters(suggested) {
                 args.push("--file-filter".into());
                 args.push(format!("{name} | {}", exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")));
             }
-            let path = match directory.as_ref().filter(|d| Path::new(d).is_dir()) {
-                Some(dir) if !Path::new(suggested).is_absolute() => Path::new(dir).join(Path::new(suggested).file_name().unwrap_or(suggested.as_ref())),
-                _ => PathBuf::from(suggested),
-            };
+            let path = PathBuf::from(suggested);
             args.push("--filename".into());
             args.push(path.to_string_lossy().into_owned());
         }
@@ -523,6 +527,44 @@ mod tests {
     use photocraft_ui_egui::{PhotocraftApp, prefs_ui};
     use serde_json::{Value, json};
 
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn open_filters_cover_uppercase_and_mixed_case_extensions() {
+        // Matches `text` against a glob of literals and `[..]` classes, as the portal would after `*.`.
+        fn matches(glob: &str, text: &str) -> bool {
+            let mut text = text.chars();
+            let mut glob = glob.chars();
+            while let Some(g) = glob.next() {
+                let class: String = if g == '[' { glob.by_ref().take_while(|&c| c != ']').collect() } else { g.to_string() };
+                if !text.next().is_some_and(|t| class.contains(t)) {
+                    return false;
+                }
+            }
+            text.next().is_none()
+        }
+        assert_eq!(open_filter_extensions(&["cr2", "pcraft"]), ["[cC][rR]2", "[pP][cC][rR][aA][fF][tT]"]);
+        let globs = open_filter_extensions(OPEN_EXTS);
+        assert_eq!(globs.len(), OPEN_EXTS.len());
+        for (ext, glob) in OPEN_EXTS.iter().zip(&globs) {
+            // Every casing: lower, UPPER, and alternating both ways (JpG, jPg).
+            let alternating = |upper_first: bool| -> String {
+                ext.chars().enumerate().map(|(i, c)| if (i % 2 == 0) == upper_first { c.to_ascii_uppercase() } else { c }).collect()
+            };
+            for name in [ext.to_string(), ext.to_ascii_uppercase(), alternating(true), alternating(false)] {
+                assert!(matches(glob, &name), "{glob} should match .{name}");
+            }
+            assert!(!matches(glob, &format!("{ext}x")) && !matches(glob, &ext[..ext.len() - 1]), "{glob} matches only .{ext}");
+        }
+        assert!(!globs.iter().any(|glob| matches(glob, "txt")));
+    }
+
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    #[test]
+    fn open_filters_keep_literal_extensions_on_windows_and_macos() {
+        assert_eq!(open_filter_extensions(OPEN_EXTS), OPEN_EXTS);
+        assert_eq!(open_filter_extensions(&["pcraft"]), ["pcraft"]);
+    }
+
     #[test]
     fn xwayland_command_matches_how_photocraft_was_installed() {
         // Flatpak: WAYLAND_DISPLAY doesn't reach the sandbox's socket choice; flatpak's flags do.
@@ -542,7 +584,7 @@ mod tests {
 
     #[test]
     fn kdialog_open_lists_formats_and_the_starting_folder() {
-        let args = kdialog_args(&FileDialogRequest::Open { multiple: true, directory: Some("/tmp".into()) });
+        let args = kdialog_args(&FileDialogRequest::Open { multiple: true, initial_dir: Some("/tmp".into()) });
         assert!(args.contains(&"--getopenfilename".into()));
         assert!(args.contains(&"--multiple".into()));
         assert!(args.contains(&"--separate-output".into()));
@@ -552,7 +594,7 @@ mod tests {
 
     #[test]
     fn kdialog_save_joins_the_folder() {
-        let args = kdialog_args(&FileDialogRequest::Save { suggested: "shot.png".into(), directory: Some("/tmp".into()) });
+        let args = kdialog_args(&FileDialogRequest::Save { suggested: "/tmp/shot.png".into() });
         assert!(args.contains(&"--getsavefilename".into()));
         assert!(args.iter().any(|a| a.ends_with("shot.png")));
         assert_eq!(

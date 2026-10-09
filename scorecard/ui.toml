@@ -17,14 +17,14 @@ id = "UI-217-2"
 target = "Window size and dock width remembered across restarts"
 status = "done"
 issue = 217
-note = "main.rs restore_window_placement: first launch centres at 1440x900 (#419); a saved ui.ron window is not recentred. dock.rs snapshot stores dockWidth in prefs.panelLayout and restore applies it via pending_dock_width"
+note = "main.rs restore_window_placement: first launch centres at 1440x900 (#419); a saved ui.ron window is not recentred. dock.rs snapshot stores dockWidth in prefs.panelLayout; eframe persist_window plus window_and_panel_geometry_survive_a_restart (#587)"
 
 [[item]]
 id = "UI-217-3"
 target = "File > Open starts in the last-used folder"
 status = "done"
 issue = 217
-note = "file_dialog.rs remembers fileHandling.lastOpenDir / lastSaveDir; services.rs set_directory when that folder exists"
+note = "file_dialog.rs last_used_dir from recents plus fileHandling.lastOpenDir / lastSaveDir; services.rs set_directory when that folder exists; open_starts_in_the_last_used_folder + last_used_dir_takes_the_most_recent_parent"
 
 [[item]]
 id = "UI-217-4"
@@ -45,14 +45,14 @@ id = "UI-217-6"
 target = "Document tabs: overflow list, context menu (Close/Others/All/Reveal), drag to reorder"
 status = "done"
 issue = 217
-note = "canvas.rs: overflow » menu (#1276); tab context Close/Others/All/Reveal via file.revealInFinder (Finder/Explorer/Files); drag reorders with document.move"
+note = "canvas.rs: Close/Others/All menu with unsaved prompt; Reveal reuses file.revealInFinder (engine layer_menu_cmds::reveal); the » chevron (tab_strip) lists overflow; dragging a tab reorders via document.move"
 
 [[item]]
 id = "UI-217-7"
 target = "Command palette shows recently run commands on an empty query"
-status = "missing"
+status = "done"
 issue = 217
-note = "palette.rs:83-108 fuzzy hits only"
+note = "palette.rs: note_recent from menus::invoke keeps the last 8 commands (dedup, newest first); an empty query lists them via recent_hits; the_palette_records_and_replays_recent_commands_on_an_empty_query covers record -> empty query -> replay"
 
 [[item]]
 id = "UI-217-8"
@@ -113,9 +113,9 @@ note = "adjust_dialog.rs adds black/gray/white eyedroppers; smoothing and pencil
 [[item]]
 id = "UI-217-16"
 target = "Hue/Saturation: Saturation and Lightness sliders get hue-following colour tracks"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only the Hue slider has a gradient"
+note = "saturation_track/lightness_track (adjust_editors.rs): grey -> the hue and black -> the hue -> white, recolouring as the Hue slider moves; saturation_and_lightness_tracks_follow_the_hue"
 
 [[item]]
 id = "UI-217-17"

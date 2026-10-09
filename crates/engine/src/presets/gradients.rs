@@ -417,10 +417,11 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
     {
         let (stops_new, opacity_new) = g.fill_stops(s.tools.foreground, s.tools.background);
         s.edit("Change Gradient Fill", |doc, _| {
+            let mode = doc.mode;
             if let Some(l) = doc.layer_mut(id)
                 && let LayerContent::Fill(Fill::Gradient { stops, opacity_stops, midpoints, .. }) = &mut l.content
             {
-                *stops = stops_new;
+                *stops = stops_new.into_iter().map(|(t, c)| (t, c.in_mode(mode))).collect();
                 *opacity_stops = opacity_new;
                 midpoints.clear();
             }
@@ -440,7 +441,7 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let style = crate::layer_style::gradient_style(p.get("style").and_then(Value::as_str).unwrap_or("linear"));
     let reverse = p.get("reverse").and_then(Value::as_bool).unwrap_or(false);
     let id = s.edit("New Gradient Fill Layer", |doc, active| {
-        let fill = Fill::gradient(stops, angle, scale, style, reverse);
+        let fill = Fill::gradient(stops, angle, scale, style, reverse).in_mode(doc.mode);
         let id = doc.insert_above(*active, Layer::new(doc.next_layer_name("Gradient Fill"), LayerContent::Fill(fill)));
         *active = Some(id);
         Ok(id)

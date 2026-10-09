@@ -249,7 +249,7 @@ fn main() -> eframe::Result {
             Ok(token) => token,
             Err(e) => {
                 eprintln!("photocraft: cannot configure control authentication: {e}");
-                return Ok(());
+                std::process::exit(2);
             }
         };
         if let Some(path) = token_file {
@@ -263,7 +263,7 @@ fn main() -> eframe::Result {
             Ok(workspace) => workspace,
             Err(error) => {
                 eprintln!("photocraft: cannot configure automation workspace: {error}");
-                return Ok(());
+                std::process::exit(2);
             }
         };
         Some((port, token, workspace))

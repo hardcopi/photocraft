@@ -25,27 +25,19 @@ use crate::file_open::display_name;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
-    /// scripts, notes, presets).
-    Open {
-        multiple: bool,
-        /// Folder to show first (File › Open last-used directory). `None` uses the platform default.
-        directory: Option<String>,
-    },
+    /// scripts, notes, presets). Starts in `initial_dir` (the last-used folder, UI-217-3).
+    Open { multiple: bool, initial_dir: Option<String> },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
-    Save {
-        suggested: String,
-        /// Folder to show first (last Save / Save As directory). `None` uses the platform default.
-        directory: Option<String>,
-    },
+    Save { suggested: String },
 }
 
 impl FileDialogRequest {
     pub fn open(multiple: bool) -> Self {
-        Self::Open { multiple, directory: None }
+        Self::Open { multiple, initial_dir: None }
     }
 
     pub fn save(suggested: impl Into<String>) -> Self {
-        Self::Save { suggested: suggested.into(), directory: None }
+        Self::Save { suggested: suggested.into() }
     }
 }
 
@@ -116,6 +108,11 @@ impl PhotocraftApp {
         }
         let mut request = request;
         fill_directory(&mut request, &self.session);
+        if let FileDialogRequest::Open { initial_dir, .. } = &mut request
+            && initial_dir.is_none()
+        {
+            *initial_dir = last_used_dir(&self.ui.recent_files);
+        }
         let kind = match request {
             FileDialogRequest::Open { .. } => "open",
             FileDialogRequest::Save { .. } => "save",
@@ -133,7 +130,15 @@ impl PhotocraftApp {
 
     /// Ask where to save: `then` gets the chosen path.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::save(suggested), move |app, answer| match answer {
+        let mut suggested = std::path::PathBuf::from(suggested);
+        // Export dialogs usually provide only a file name. Start beside the source document,
+        // while preserving a caller's explicit directory and the untitled-document fallback.
+        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
+            && let Some(dir) = self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent())
+        {
+            suggested = dir.join(suggested);
+        }
+        self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string_lossy().into_owned() }, move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => then(app, path),
             _ => Err(UNEXPECTED.into()),
         })
@@ -219,6 +224,12 @@ impl PhotocraftApp {
     }
 }
 
+/// The folder an open dialog starts in: the directory of the most recent file (UI-217-3).
+fn last_used_dir(recent: &[String]) -> Option<String> {
+    let dir = std::path::Path::new(recent.first()?).parent()?;
+    (!dir.as_os_str().is_empty()).then(|| dir.to_string_lossy().into_owned())
+}
+
 /// The name and bytes of the single file an open dialog answered with.
 fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
     match answer {
@@ -235,11 +246,14 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
 fn fill_directory(request: &mut FileDialogRequest, session: &photocraft_engine::Session) {
     let fh = &session.prefs().file_handling;
     match request {
-        FileDialogRequest::Open { directory, .. } if directory.is_none() && !fh.last_open_dir.is_empty() => {
-            *directory = Some(fh.last_open_dir.clone());
+        FileDialogRequest::Open { initial_dir, .. } if initial_dir.is_none() && !fh.last_open_dir.is_empty() => {
+            *initial_dir = Some(fh.last_open_dir.clone());
         }
-        FileDialogRequest::Save { directory, .. } if directory.is_none() && !fh.last_save_dir.is_empty() => {
-            *directory = Some(fh.last_save_dir.clone());
+        FileDialogRequest::Save { suggested }
+            if Path::new(suggested).parent().is_none_or(|p| p.as_os_str().is_empty()) && !fh.last_save_dir.is_empty() =>
+        {
+            let name = Path::new(suggested).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| suggested.clone());
+            *suggested = Path::new(&fh.last_save_dir).join(name).to_string_lossy().into_owned();
         }
         _ => {}
     }
