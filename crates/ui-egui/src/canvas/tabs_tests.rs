@@ -86,3 +86,28 @@ fn studio_tabs_overflow_into_the_same_menu() {
     let name = h.state().session.documents()[active].doc.name.clone();
     assert!(h.query_by_label(&name).is_some(), "the active tab is on the strip: {name}");
 }
+
+#[test]
+fn dragging_a_document_tab_reorders_the_session() {
+    use egui::Modifiers;
+    use egui::{Event, PointerButton};
+    let mut h = harness(3, ThemeKind::Pro);
+    let names = |h: &Harness<'_, PhotocraftApp>| h.state().session.documents().iter().map(|d| d.doc.name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(&h), ["ch1-p01.png", "ch1-p02.png", "ch1-p03.png"]);
+    let from_title = pro_tab_title(h.state(), 0);
+    let last_title = pro_tab_title(h.state(), 2);
+    let from = h.get_by_label(&from_title).rect().center();
+    let to = h.get_by_label(&last_title).rect().right_center();
+    h.event(Event::PointerMoved(from));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for k in 1..=8 {
+        h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert_eq!(names(&h), ["ch1-p02.png", "ch1-p03.png", "ch1-p01.png"]);
+    assert_eq!(super::tab_reorder_to(0, 3), Some(2));
+}

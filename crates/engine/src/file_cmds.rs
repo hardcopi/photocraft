@@ -46,6 +46,39 @@ fn can_revert(s: &Session) -> std::result::Result<(), String> {
     Ok(())
 }
 
+fn can_reveal(s: &Session) -> std::result::Result<(), String> {
+    native(s)?;
+    if s.documents().is_empty() {
+        return Err("no document open".into());
+    }
+    if s.documents().iter().any(|d| d.path.as_deref().is_some_and(is_file)) { Ok(()) } else { Err("the document has never been saved".into()) }
+}
+
+/// Show the document's file in the platform file manager (Finder / Explorer / Files).
+fn reveal_in_file_manager(s: &mut Session, p: &Value) -> Result<Value> {
+    native(s).map_err(EngineError::Other)?;
+    let i = match p.get("document").and_then(Value::as_u64) {
+        Some(n) => usize::try_from(n).map_err(|_| EngineError::BadParams { cmd: "file.revealInFinder".into(), msg: "`document` out of range".into() })?,
+        None => s.active_index().ok_or(EngineError::NoDocument)?,
+    };
+    let path = s
+        .documents()
+        .get(i)
+        .ok_or_else(|| EngineError::Other(format!("no document at index {i}")))?
+        .path
+        .clone()
+        .ok_or_else(|| EngineError::Other("the document has never been saved".into()))?;
+    if !is_file(&path) {
+        return Err(EngineError::Other(format!("{path} is not a file on disk")));
+    }
+    let (program, args) = crate::layer_menu_cmds::reveal_command(&path);
+    if p.get("dryRun").and_then(Value::as_bool).unwrap_or(false) {
+        return Ok(json!({"program": program, "args": args, "path": path}));
+    }
+    crate::layer_menu_cmds::spawn(program, &args)?;
+    Ok(json!({"path": path}))
+}
+
 fn has_adjustments(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     if d.doc.layers.iter().any(|l| l.visible && matches!(l.content, LayerContent::Adjustment(_))) {
@@ -1132,6 +1165,16 @@ pub fn specs() -> Vec<CommandSpec> {
             has_doc,
             close_others
         ),
+        CommandSpec {
+            id: "file.revealInFinder",
+            label: "Reveal in Finder",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"document":index?,"dryRun":bool=false}"##,
+            enabled: can_reveal,
+            run: reveal_in_file_manager,
+            journal: false,
+        },
         spec!("file.revert", "Revert", &["File"], Some("F12"), "{} (reloads the saved file as one undoable step)", can_revert, |s, _| revert(s)),
         spec!(
             "file.saveACopy",

@@ -39,7 +39,7 @@ Canvas invariant: secondary click must not accidentally start a paint stroke, co
 | Color chip in color panel | Right-click sets background color (left-click sets foreground). | Direct UI state behavior; verify foreground/background target commands. |
 | Wide Angle constraint | Right-click deletes that constraint. | Tool-local action; no menu. |
 | Camera Raw point curve | Right-click deletes a curve point. | Tool-local action; no menu. |
-| Document tab / loading tab | No context menu at branch point. This PR adds Close, Close Others, Close All for document tabs. Left click activates; close icon closes/cancels. | Existing guarded File commands handle unsaved documents; reveal file and tab layout remain open. |
+| Document tab / loading tab | Close, Close Others, Close All, Reveal in Finder/Explorer/Files. Left click activates; close icon closes/cancels; drag reorders tabs. | Close commands go through the guarded File menu; Reveal is `file.revealInFinder` (disabled until the tab is a file on disk). Loading tabs still have no context menu. |
 | Paths panel row | Make Selection, Fill/Stroke Path, Save Work Path or Duplicate Path, Delete Path or Vector Mask as applicable (added in this PR). | `path.*` and `layer.vectorMask.delete`; direct action on the clicked path. |
 | History, Properties and empty panel areas | No `context_menu` handler found in UI source at this audit. | Audit each panel's Photoshop menu and prioritize its useful commands; do not invent dead entries. |
 

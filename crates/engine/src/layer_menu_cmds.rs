@@ -371,12 +371,12 @@ pub fn reveal_command(path: &str) -> (&'static str, Vec<String>) {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn spawn(program: &str, args: &[String]) -> Result<()> {
+pub(crate) fn spawn(program: &str, args: &[String]) -> Result<()> {
     std::process::Command::new(program).args(args).spawn().map(|_| ()).map_err(|e| other(format!("{program}: {e}")))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn spawn(_: &str, _: &[String]) -> Result<()> {
+pub(crate) fn spawn(_: &str, _: &[String]) -> Result<()> {
     Err(other("Reveal in Finder needs the desktop app"))
 }
 

@@ -43,9 +43,9 @@ note = "No floating groups in dock.rs/panels.rs"
 [[item]]
 id = "UI-217-6"
 target = "Document tabs: overflow list, context menu (Close/Others/All/Reveal), drag to reorder"
-status = "partial"
+status = "done"
 issue = 217
-note = "canvas.rs: Close/Others/All context menu with unsaved prompt; overflow, Reveal, drag reorder still missing"
+note = "canvas.rs: overflow » menu (#1276); tab context Close/Others/All/Reveal via file.revealInFinder (Finder/Explorer/Files); drag reorders with document.move"
 
 [[item]]
 id = "UI-217-7"

@@ -1387,7 +1387,7 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             let name_g = crate::tab_strip::elided(ui, &name, font.clone(), t.text, name_max);
             // The title was cut: the tooltip has the rest of it.
             let cut = name_g.size().x + 0.5 < natural_w - STUDIO_TAB_PAD + STUDIO_TAB_GAP - meta_g.size().x;
-            let resp = ui.interact(r, ui.id().with(("dtab", i)), Sense::click());
+            let resp = ui.interact(r, ui.id().with(("dtab", i)), Sense::click_and_drag());
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, sel, &st.doc.name));
             doc_tabs.push((i, r));
             if sel {
@@ -1411,13 +1411,14 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             }
             crate::icons::paint(ui, xr, "x", 11.0, if xresp.hovered() { t.text } else { t.text_faint });
             let resp = if cut { resp.on_hover_text(name) } else { resp };
+            begin_tab_drag(app, &resp, i, tab_count);
             if xresp.clicked() {
                 close = Some(i);
-            } else if resp.clicked() {
+            } else if resp.clicked() && app.tab_drag.is_none() {
                 activate = Some(i);
             }
             resp.context_menu(|ui| {
-                tab_action = tab_context_menu(ui, i, tab_count);
+                tab_action = tab_context_menu(ui, i, tab_count, app.session.documents().get(i).and_then(|d| d.path.as_ref()).is_some());
             });
         }
         // Files opening in the background: a tab with a progress underline; × cancels.
@@ -1476,30 +1477,96 @@ fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+    paint_tab_insert(app, ui, &doc_tabs);
+    finish_tab_drag(app, ui, &doc_tabs);
     TabStrip { rect: frame.response.rect, tabs: doc_tabs }
 }
 
 /// All tab actions go through the same guarded File commands as the menu bar, including the
 /// unsaved-changes prompt. The clicked tab is explicit even when another document is active.
-fn tab_context_items(index: usize, count: usize) -> [(&'static str, &'static str, serde_json::Value, bool); 3] {
-    [
+fn tab_context_items(index: usize, count: usize, reveal: bool) -> Vec<(&'static str, &'static str, serde_json::Value, bool)> {
+    vec![
         ("Close", "file.close", json!({"document": index}), true),
         ("Close Others", "file.closeOthers", json!({"document": index}), count > 1),
         ("Close All", "file.closeAll", json!({}), true),
+        (reveal_tab_label(), "file.revealInFinder", json!({"document": index}), reveal && cfg!(not(target_arch = "wasm32"))),
     ]
 }
 
-fn tab_context_menu(ui: &mut egui::Ui, index: usize, count: usize) -> Option<(&'static str, serde_json::Value)> {
+fn reveal_tab_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Reveal in Finder"
+    } else if cfg!(target_os = "windows") {
+        "Reveal in Explorer"
+    } else {
+        "Reveal in Files"
+    }
+}
+
+fn tab_context_label(id: &str, label: &str) -> String {
+    // Named per platform so each OS label is a source-scanned translation key.
+    if id == "file.revealInFinder" {
+        if cfg!(target_os = "macos") {
+            tl!("Reveal in Finder").to_string()
+        } else if cfg!(target_os = "windows") {
+            tl!("Reveal in Explorer").to_string()
+        } else {
+            tl!("Reveal in Files").to_string()
+        }
+    } else {
+        tl!(label).to_string()
+    }
+}
+
+fn tab_context_menu(ui: &mut egui::Ui, index: usize, count: usize, reveal: bool) -> Option<(&'static str, serde_json::Value)> {
     crate::widgets::menu_scroll(ui, |ui| {
         ui.set_min_width(170.0);
-        for (label, id, params, enabled) in tab_context_items(index, count) {
-            if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
+        for (label, id, params, enabled) in tab_context_items(index, count, reveal) {
+            if ui.add_enabled(enabled, egui::Button::new(tab_context_label(id, label))).clicked() {
                 ui.close();
                 return Some((id, params));
             }
         }
         None
     })
+}
+
+/// `document.move` index for a drop at [`TabStrip::slot`].
+pub(crate) fn tab_reorder_to(from: usize, slot: usize) -> Option<usize> {
+    let to = if from < slot { slot.saturating_sub(1) } else { slot };
+    (to != from).then_some(to)
+}
+
+fn begin_tab_drag(app: &mut PhotocraftApp, resp: &egui::Response, index: usize, tab_count: usize) {
+    if tab_count > 1 && crate::layer_transfer::pointer_if_armed(app, &resp.ctx).is_none() && resp.drag_started() {
+        app.tab_drag = Some(index);
+    }
+}
+
+fn finish_tab_drag(app: &mut PhotocraftApp, ui: &egui::Ui, tabs: &[(usize, Rect)]) {
+    if !ui.input(|i| i.pointer.primary_released()) {
+        return;
+    }
+    let Some(from) = app.tab_drag.take() else { return };
+    let Some(pos) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())) else { return };
+    let slot = TabStrip { rect: Rect::ZERO, tabs: tabs.to_vec() }.slot(pos.x);
+    if let Some(to) = tab_reorder_to(from, slot) {
+        let _ = app.run("document.move", json!({"document": from, "to": to}));
+    }
+}
+
+fn paint_tab_insert(app: &PhotocraftApp, ui: &egui::Ui, tabs: &[(usize, Rect)]) {
+    if app.tab_drag.is_none() {
+        return;
+    }
+    let Some(pos) = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())) else { return };
+    let slot = TabStrip { rect: Rect::ZERO, tabs: tabs.to_vec() }.slot(pos.x);
+    let t = crate::theme::Tokens::get(ui.ctx());
+    if let Some((_, r)) = tabs.iter().find(|(i, _)| *i == slot) {
+        crate::widgets::drop_line(ui, *r, false, true, &t);
+    } else if let Some((_, r)) = tabs.last() {
+        crate::widgets::drop_line(ui, *r, true, true, &t);
+    }
 }
 
 /// Apply tab-strip clicks: a document tab shows that document, an opening tab its progress, and
@@ -1583,7 +1650,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
         let Some(title) = titles.get(i) else { continue };
         let g = crate::tab_strip::elided(ui, title, font.clone(), t.text, (r.width() - DOC_TAB_PAD).max(1.0));
-        let resp = ui.interact(r, ui.id().with(("ptab", i)), Sense::click());
+        let resp = ui.interact(r, ui.id().with(("ptab", i)), Sense::click_and_drag());
         let sel = Some(i) == active;
         if sel {
             ui.painter().rect_filled(r, 0.0, t.chrome);
@@ -1604,13 +1671,14 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         ui.painter().galley_with_override_text_color(at, g, if sel { t.text } else { t.text_faint });
         let cut = natural.get(i).copied().unwrap_or(0.0) > r.width() + 0.5;
         let resp = if cut { resp.on_hover_text(title.as_str()) } else { resp };
+        begin_tab_drag(app, &resp, i, tab_count);
         if xresp.clicked() {
             close = Some(i);
-        } else if resp.clicked() {
+        } else if resp.clicked() && app.tab_drag.is_none() {
             activate = Some(i);
         }
         resp.context_menu(|ui| {
-            tab_action = tab_context_menu(ui, i, tab_count);
+            tab_action = tab_context_menu(ui, i, tab_count, app.session.documents().get(i).and_then(|d| d.path.as_ref()).is_some());
         });
         doc_tabs.push((i, r));
     }
@@ -1663,6 +1731,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         app.ui.status = e;
         app.ui.status_error = true;
     }
+    paint_tab_insert(app, ui, &doc_tabs);
+    finish_tab_drag(app, ui, &doc_tabs);
     TabStrip { rect: strip, tabs: doc_tabs }
 }
 
@@ -3936,13 +4006,26 @@ mod tests {
 
     #[test]
     fn tab_context_uses_clicked_document_and_existing_close_commands() {
-        let items = tab_context_items(2, 3);
-        assert_eq!(items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(), ["file.close", "file.closeOthers", "file.closeAll"]);
+        let items = tab_context_items(2, 3, false);
+        assert_eq!(items.iter().map(|(_, id, _, _)| *id).collect::<Vec<_>>(), ["file.close", "file.closeOthers", "file.closeAll", "file.revealInFinder"]);
         assert_eq!(items[0].2, json!({"document": 2}));
         assert_eq!(items[1].2, json!({"document": 2}));
         assert_eq!(items[2].2, json!({}));
-        assert!(!tab_context_items(0, 1)[1].3);
+        assert_eq!(items[3].2, json!({"document": 2}));
+        assert!(!tab_context_items(0, 1, false)[1].3);
+        assert!(!items[3].3, "Reveal stays off until the clicked tab is a file on disk");
+        assert_eq!(tab_context_items(0, 2, true)[3].3, cfg!(not(target_arch = "wasm32")));
         assert!(items.iter().all(|(_, id, _, _)| photocraft_engine::commands::find(id).is_some()));
+    }
+
+    #[test]
+    fn tab_reorder_to_maps_an_insert_slot_onto_document_move() {
+        assert_eq!(tab_reorder_to(0, 3), Some(2));
+        assert_eq!(tab_reorder_to(2, 0), Some(0));
+        assert_eq!(tab_reorder_to(1, 1), None);
+        assert_eq!(tab_reorder_to(1, 2), None);
+        assert_eq!(tab_reorder_to(0, 1), None);
+        assert_eq!(tab_reorder_to(0, 0), None);
     }
 
     /// Photoshop's document tab × is after the title on Windows and Linux, before it on macOS (#619).
@@ -3984,7 +4067,7 @@ mod tests {
         app.run("file.new", json!({"width": 8, "height": 8, "name": "Edited"})).unwrap();
         app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
         assert_eq!(app.session.active_index(), Some(1));
-        let (_, id, params, _) = tab_context_items(0, 2)[1].clone();
+        let (_, id, params, _) = tab_context_items(0, 2, false)[1].clone();
         crate::menus::invoke(&mut app, &egui::Context::default(), id, params).unwrap();
         assert!(app.discard.is_some(), "close others must ask before discarding the edited tab");
         assert_eq!(app.session.documents().len(), 2);

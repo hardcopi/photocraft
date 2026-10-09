@@ -32,6 +32,43 @@ fn composite(s: &Session, x: i32, y: i32) -> [f32; 4] {
 }
 
 #[test]
+fn reveal_in_finder_needs_a_saved_file_and_dry_runs() {
+    let mut s = session(8, 8, 8);
+    assert!(!s.is_enabled("file.revealInFinder"), "unsaved documents have nothing to reveal");
+    let dir = tmp("reveal");
+    let path = png(&dir, "shot.png", 8, 8, "#ff0000");
+    s.active_mut().unwrap().path = Some(path.clone());
+    assert!(s.is_enabled("file.revealInFinder"));
+    let r = s.execute("file.revealInFinder", json!({"dryRun": true})).unwrap();
+    assert_eq!(r["path"], json!(path));
+    let program = r["program"].as_str().unwrap();
+    if cfg!(target_os = "macos") {
+        assert_eq!(program, "open");
+    } else if cfg!(target_os = "windows") {
+        assert_eq!(program, "explorer");
+    } else {
+        assert_eq!(program, "xdg-open");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn reveal_in_finder_rejects_a_missing_or_unsaved_document() {
+    let mut s = session(8, 8, 8);
+    assert!(s.execute("file.revealInFinder", json!({})).is_err());
+    assert!(s.execute("file.revealInFinder", json!({"document": 9})).is_err());
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let dir = tmp("reveal-other");
+    let path = png(&dir, "shot.png", 8, 8, "#00ff00");
+    s.set_active(1);
+    s.active_mut().unwrap().path = Some(path.clone());
+    s.set_active(0);
+    let r = s.execute("file.revealInFinder", json!({"document": 1, "dryRun": true})).unwrap();
+    assert_eq!(r["path"], json!(path));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn close_all_and_close_others() {
     let mut s = session(8, 8, 8);
     s.execute("file.new", json!({"width": 9, "height": 9})).unwrap();
