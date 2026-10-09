@@ -60,7 +60,17 @@ fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
 /// Shows an Open or Save dialog without blocking the event loop (#673, #574): rfd's async dialog
 /// is created here, on the main thread, with the window as its parent (a sheet on macOS, an owned
 /// modal window elsewhere), and a helper thread waits for it and hands the answer to the app.
+///
+/// Chrome Remote Desktop (and other nested X11 sessions) share the host D-Bus. rfd's default
+/// xdg-desktop-portal backend then shows the chooser on the host compositor, or waits forever;
+/// File › Open looks dead. KDialog (or Zenity) talks to `DISPLAY` instead.
 fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, reply: FileDialogReply) {
+    if display_file_dialog() {
+        if let Err(e) = std::thread::Builder::new().name("file dialog".into()).spawn(move || reply.send(x11_pick(&request))) {
+            log::error!("couldn't wait for the file dialog: {e}");
+        }
+        return;
+    }
     let mut dialog = rfd::AsyncFileDialog::new();
     if let Some(parent) = parent {
         dialog = dialog.set_parent(parent);
@@ -101,6 +111,130 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
 
 fn path_of(file: &rfd::FileHandle) -> String {
     file.path().to_string_lossy().into_owned()
+}
+
+/// True when the file chooser must follow this process's `DISPLAY` instead of xdg-desktop-portal.
+fn display_file_dialog() -> bool {
+    if !cfg!(target_os = "linux") {
+        return false;
+    }
+    if std::env::var_os("CHROME_REMOTE_DESKTOP_SESSION").is_some() {
+        return true;
+    }
+    std::env::var_os("DISPLAY").is_some() && std::env::var_os("WAYLAND_DISPLAY").is_none_or(|v| v.is_empty())
+}
+
+fn which(name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("PATH")
+        .and_then(|path| std::env::split_paths(&path).map(|dir| dir.join(name)).find(|p| p.is_file()))
+        .or_else(|| ["/usr/bin", "/usr/sbin"].iter().map(|d| PathBuf::from(d).join(name)).find(|p| p.is_file()))
+}
+
+fn x11_pick(request: &FileDialogRequest) -> Option<FileDialogAnswer> {
+    // Qt's KDialog maps a real window on this Xvfb. GTK's file chooser (zenity) often stays 1×1
+    // because it still talks to EGL/portal even with GTK_USE_PORTAL=0.
+    if which("kdialog").is_some() {
+        return run_picker("kdialog", &kdialog_args(request), request, '\n');
+    }
+    if which("zenity").is_some() {
+        return run_picker("zenity", &zenity_args(request), request, '|');
+    }
+    log::error!("File › Open needs kdialog or zenity on this display (xdg-desktop-portal never shows here)");
+    None
+}
+
+fn run_picker(bin: &str, args: &[String], request: &FileDialogRequest, sep: char) -> Option<FileDialogAnswer> {
+    let mut cmd = std::process::Command::new(which(bin).unwrap_or_else(|| PathBuf::from(bin)));
+    cmd.env("GTK_USE_PORTAL", "0").env("GDK_BACKEND", "x11");
+    cmd.args(args);
+    match cmd.output() {
+        Ok(out) => picker_answer(request, &out.stdout, sep),
+        Err(e) => {
+            log::error!("{bin}: {e}");
+            None
+        }
+    }
+}
+
+fn kdialog_filter() -> String {
+    format!("{}|All Formats", OPEN_EXTS.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" "))
+}
+
+/// kdialog argv after the program name.
+fn kdialog_args(request: &FileDialogRequest) -> Vec<String> {
+    match request {
+        FileDialogRequest::Open { multiple, directory } => {
+            let mut args = Vec::new();
+            if *multiple {
+                args.extend(["--multiple".into(), "--separate-output".into()]);
+            }
+            args.push("--getopenfilename".into());
+            let start = directory.as_ref().filter(|d| Path::new(d).is_dir()).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+            args.push(start);
+            args.push(kdialog_filter());
+            args
+        }
+        FileDialogRequest::Save { suggested, directory } => {
+            let path = match directory.as_ref().filter(|d| Path::new(d).is_dir()) {
+                Some(dir) if !Path::new(suggested).is_absolute() => Path::new(dir).join(Path::new(suggested).file_name().unwrap_or(suggested.as_ref())),
+                _ => PathBuf::from(suggested),
+            };
+            let filters: Vec<String> = save_filters(suggested)
+                .into_iter()
+                .map(|(name, exts)| format!("{}|{name}", exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")))
+                .collect();
+            vec!["--getsavefilename".into(), path.to_string_lossy().into_owned(), filters.join("\n")]
+        }
+    }
+}
+
+/// Zenity argv after the program name.
+fn zenity_args(request: &FileDialogRequest) -> Vec<String> {
+    let mut args = vec!["--file-selection".into(), "--separator".into(), "|".into()];
+    match request {
+        FileDialogRequest::Open { multiple, directory } => {
+            if *multiple {
+                args.push("--multiple".into());
+            }
+            args.push("--file-filter".into());
+            args.push(format!("All Formats | {}", OPEN_EXTS.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")));
+            args.push("--file-filter".into());
+            args.push("PhotoCraft | *.pcraft".into());
+            if let Some(dir) = directory.as_ref().filter(|d| Path::new(d).is_dir()) {
+                args.push("--filename".into());
+                args.push(format!("{}/", dir.trim_end_matches('/')));
+            }
+        }
+        FileDialogRequest::Save { suggested, directory } => {
+            args.push("--save".into());
+            args.push("--confirm-overwrite".into());
+            for (name, exts) in save_filters(suggested) {
+                args.push("--file-filter".into());
+                args.push(format!("{name} | {}", exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")));
+            }
+            let path = match directory.as_ref().filter(|d| Path::new(d).is_dir()) {
+                Some(dir) if !Path::new(suggested).is_absolute() => Path::new(dir).join(Path::new(suggested).file_name().unwrap_or(suggested.as_ref())),
+                _ => PathBuf::from(suggested),
+            };
+            args.push("--filename".into());
+            args.push(path.to_string_lossy().into_owned());
+        }
+    }
+    args
+}
+
+fn picker_answer(request: &FileDialogRequest, stdout: &[u8], sep: char) -> Option<FileDialogAnswer> {
+    let text = String::from_utf8_lossy(stdout).trim().to_string();
+    if text.is_empty() {
+        return None;
+    }
+    match request {
+        FileDialogRequest::Save { .. } => Some(FileDialogAnswer::SaveTo(text)),
+        FileDialogRequest::Open { .. } => {
+            let paths: Vec<String> = text.split(sep).map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect();
+            (!paths.is_empty()).then_some(FileDialogAnswer::Paths(paths))
+        }
+    }
 }
 
 /// Runs `future` to completion on this thread, sleeping until it is woken.
@@ -404,6 +538,28 @@ mod tests {
         assert_eq!(xwayland_command(Some(""), Some(""), true).as_deref(), Some("WAYLAND_DISPLAY= photocraft"));
         // No X server (XWayland disabled): nothing to suggest.
         assert_eq!(xwayland_command(None, Some("/opt/p.AppImage"), false), None);
+    }
+
+    #[test]
+    fn kdialog_open_lists_formats_and_the_starting_folder() {
+        let args = kdialog_args(&FileDialogRequest::Open { multiple: true, directory: Some("/tmp".into()) });
+        assert!(args.contains(&"--getopenfilename".into()));
+        assert!(args.contains(&"--multiple".into()));
+        assert!(args.contains(&"--separate-output".into()));
+        assert!(args.contains(&"/tmp".into()));
+        assert!(args.iter().any(|a| a.contains("*.psd") && a.contains("*.png") && a.contains("All Formats")));
+    }
+
+    #[test]
+    fn kdialog_save_joins_the_folder() {
+        let args = kdialog_args(&FileDialogRequest::Save { suggested: "shot.png".into(), directory: Some("/tmp".into()) });
+        assert!(args.contains(&"--getsavefilename".into()));
+        assert!(args.iter().any(|a| a.ends_with("shot.png")));
+        assert_eq!(
+            picker_answer(&FileDialogRequest::open(true), b"/tmp/a.png\n/tmp/b.jpg\n", '\n'),
+            Some(FileDialogAnswer::Paths(vec!["/tmp/a.png".into(), "/tmp/b.jpg".into()]))
+        );
+        assert_eq!(picker_answer(&FileDialogRequest::save("x.psd"), b"", '|'), None);
     }
 
     /// Tests every native save dialog and records the suggested file name. Each name's file type must come first
