@@ -191,6 +191,24 @@ fn dragging_the_splitter_resizes_and_survives_a_ui_state_round_trip() {
 }
 
 #[test]
+fn dock_width_is_remembered_in_panel_layout() {
+    let (app, _, _) = app_with_layers();
+    let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
+    let ctx = h.ctx.clone();
+    crate::panels::request_dock_width(&ctx, 410.0);
+    h.run_steps(4);
+    persist(h.state_mut(), &ctx);
+    let w = h.state().session.prefs().panel_layout.get("dockWidth").and_then(|v| v.as_f64());
+    assert_eq!(w, Some(410.0), "panelLayout stores the dock width");
+    let prefs = h.state().session.prefs_to_json();
+    let mut s2 = photocraft_engine::Session::new();
+    s2.load_prefs_json(&prefs).unwrap();
+    let mut app2 = PhotocraftApp::new(s2, crate::Services::default());
+    restore(&mut app2);
+    assert_eq!(app2.pending_dock_width, Some(410.0));
+}
+
+#[test]
 fn reset_workspace_restores_the_default_layout_and_new_workspaces_keep_theirs() {
     let (app, _, _) = app_with_layers();
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);

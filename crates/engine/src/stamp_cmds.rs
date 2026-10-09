@@ -146,7 +146,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec {
             id: "layer.stampVisible",
             label: "Stamp Visible",
-            menu: &[],
+            menu: &["Layer"],
             shortcut: Some("Cmd+Alt+Shift+E"),
             params: r##"{} → {layer} (every visible layer merged into a new layer above the active one; the originals stay)"##,
             enabled: has_doc,
@@ -328,6 +328,7 @@ mod tests {
     fn shortcuts_are_photoshops_and_rebindable() {
         let spec = |id: &str| crate::commands::find(id).unwrap();
         assert_eq!(spec("layer.stampVisible").shortcut, Some("Cmd+Alt+Shift+E"));
+        assert_eq!(spec("layer.stampVisible").menu, &["Layer"]);
         assert_eq!(spec("layer.stampDown").shortcut, Some("Cmd+Alt+E"));
         let mut s = Session::new();
         s.execute("edit.keyboardShortcuts", json!({"set": {"layer.stampVisible": "F7"}})).unwrap();

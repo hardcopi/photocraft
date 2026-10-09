@@ -351,6 +351,10 @@ pub struct FileHandling {
     pub recent_file_count: u32,
     /// Most recently opened files, newest first (File › Open Recent).
     pub recent_files: Vec<String>,
+    /// Directory File › Open last used (and other pick-file dialogs). Empty until a file is chosen.
+    pub last_open_dir: String,
+    /// Directory File › Save / Save As last used. Empty until a file is chosen.
+    pub last_save_dir: String,
 }
 
 impl Default for FileHandling {
@@ -367,6 +371,8 @@ impl Default for FileHandling {
             maximize_psd_compatibility: Ask::Always,
             recent_file_count: 20,
             recent_files: Vec::new(),
+            last_open_dir: String::new(),
+            last_save_dir: String::new(),
         }
     }
 }

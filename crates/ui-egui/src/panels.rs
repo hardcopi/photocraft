@@ -1145,6 +1145,9 @@ fn dock_panels(app: &mut PhotocraftApp, ui: &mut egui::Ui, p: &crate::state::Pan
     }
     let margin = if t.pro { 2 } else { 8 };
     let mut panel = egui::Panel::right("dock").resizable(true).default_size(if t.pro { 290.0 } else { 300.0 }).size_range(DOCK_WIDTH);
+    if let Some(w) = app.pending_dock_width.take() {
+        request_dock_width(ui.ctx(), w);
+    }
     if let Some(w) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(dock_width_id())) {
         panel = panel.exact_size(w);
     }

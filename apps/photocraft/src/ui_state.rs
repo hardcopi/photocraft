@@ -27,6 +27,17 @@ pub fn sanitize(path: Option<&Path>) {
     }
 }
 
+/// Whether eframe has a saved native window (size and position) to restore.
+///
+/// eframe applies that geometry, then `NativeOptions::centered` overwrites the position, so a
+/// launch that has a saved window must not centre.
+pub fn has_window(path: Option<&Path>) -> bool {
+    let Some(path) = path else { return false };
+    let Ok(text) = std::fs::read_to_string(path) else { return false };
+    let Ok(kv) = ron::from_str::<std::collections::HashMap<String, String>>(&text) else { return false };
+    kv.get("window").is_some_and(|v| ron::from_str::<ron::Value>(v).is_ok())
+}
+
 /// `Err` names the first value that would crash startup.
 fn check(text: &str) -> Result<(), String> {
     // eframe stores a map of key → RON string; a file that doesn't parse is ignored by eframe.
@@ -91,6 +102,20 @@ mod tests {
     fn a_saved_layout_is_kept() {
         assert_eq!(check(&file(WINDOW, "1.0")), Ok(()));
         assert_eq!(check(&file(WINDOW, "0.375")), Ok(()));
+    }
+
+    #[test]
+    fn has_window_only_when_eframe_stored_one() {
+        let dir = std::env::temp_dir().join(format!("photocraft-has-window-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui.ron");
+        assert!(!super::has_window(None));
+        assert!(!super::has_window(Some(&path)));
+        std::fs::write(&path, file(WINDOW, "1.0")).unwrap();
+        assert!(super::has_window(Some(&path)));
+        std::fs::write(&path, "{\"egui\":\"(options:(zoom_factor:1.0))\"}").unwrap();
+        assert!(!super::has_window(Some(&path)));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

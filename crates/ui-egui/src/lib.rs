@@ -477,6 +477,8 @@ pub struct PhotocraftApp {
     pub(crate) discard: Option<discard_ui::Prompt>,
     /// The Open or Save dialog in progress, and the action waiting on it (see `file_dialog`).
     pub(crate) file_dialog: Option<file_dialog::Pending>,
+    /// Dock width to apply on the next `dock_panels` (restored from `prefs.panelLayout`).
+    pub(crate) pending_dock_width: Option<f32>,
     /// A Save As to a layered TIFF parked behind the TIFF Options prompt (see `tiff_options_ui`).
     pub(crate) tiff_options: Option<tiff_options_ui::Prompt>,
     /// Set once the user has agreed to quit, so the resulting close request goes through.
@@ -577,6 +579,7 @@ impl PhotocraftApp {
             prefs_rt: Default::default(),
             discard: None,
             file_dialog: None,
+            pending_dock_width: None,
             tiff_options: None,
             allow_close: false,
             stylus: Default::default(),

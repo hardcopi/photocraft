@@ -65,9 +65,11 @@ fn custom_titlebar(prefs_file: Option<&std::path::Path>) -> bool {
 }
 
 /// The main window: 1440 × 900 (shrunk to fit the monitor, and maximized on the first frame
-/// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor. Without
-/// `centered`, Windows cascades each new window from the top-left corner, so it opened at a
-/// different offset every launch (#419). Wayland compositors place windows themselves.
+/// when it still doesn't fit, `work_area::fit_window`), centred on the main monitor on a first
+/// launch. Without `centered`, Windows cascades each new window from the top-left corner, so it
+/// opened at a different offset every launch (#419). A later launch that has a saved `ui.ron`
+/// window must not centre: eframe restores size and position, then `centered` would overwrite
+/// the position. Wayland compositors place windows themselves.
 fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
     eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -86,6 +88,15 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
         // Keep that state beside preferences, including config overrides and portable mode.
         persistence_path: services::config_dir().map(|dir| dir.join("ui.ron")),
         ..Default::default()
+    }
+}
+
+/// Drop a `ui.ron` that would crash startup, then honour a saved window's position instead of
+/// recentring (#419, UI-217-2).
+fn restore_window_placement(options: &mut eframe::NativeOptions) {
+    ui_state::sanitize(options.persistence_path.as_deref());
+    if ui_state::has_window(options.persistence_path.as_deref()) {
+        options.centered = false;
     }
 }
 
@@ -288,8 +299,9 @@ fn main() -> eframe::Result {
             builder.with_x11();
         }));
     }
-    // eframe restores the saved window layout before our code runs; drop values that would crash it.
-    ui_state::sanitize(options.persistence_path.as_deref());
+    // eframe restores the saved window layout before our code runs; drop values that would crash it,
+    // and keep a saved position instead of recentring on every launch.
+    restore_window_placement(&mut options);
     // Crash-safe GPU startup (#4): pick the backend (a marker left by a start that died in the
     // driver moves to a safer one), and lock this start's marker until the first frames render.
     let t_sentinel = std::time::Instant::now();
@@ -559,6 +571,28 @@ mod tests {
         assert_eq!(o.viewport.inner_size, Some(egui::vec2(1440.0, 900.0)));
         // eframe shrinks the start size to the monitor, so the centred position is on-screen.
         assert_ne!(o.viewport.clamp_size_to_monitor_size, Some(false));
+    }
+
+    #[test]
+    fn a_saved_window_is_not_recentred() {
+        // eframe restores inner_position from `window` in ui.ron, then `centered: true` would
+        // overwrite it. A first launch (no file) still centres.
+        let dir = std::env::temp_dir().join(format!("pc-win-place-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui.ron");
+        let mut first = super::native_options(super::CUSTOM_TITLEBAR);
+        first.persistence_path = Some(path.clone());
+        super::restore_window_placement(&mut first);
+        assert!(first.centered, "first launch centres");
+        let window = "(inner_position_pixels:Some((x:80.0,y:40.0)),fullscreen:false,inner_size_points:Some((x:1100.0,y:760.0)))";
+        let egui = "(options:(zoom_factor:1.0,max_passes:2),data:([(18446744073709551615,(ron:\"(x:1.0)\"))]))";
+        std::fs::write(&path, format!("{{\"window\":{window:?},\"egui\":{egui:?}}}")).unwrap();
+        let mut again = super::native_options(super::CUSTOM_TITLEBAR);
+        again.persistence_path = Some(path);
+        super::restore_window_placement(&mut again);
+        assert!(!again.centered, "a saved window keeps its position");
+        assert_eq!(again.viewport.inner_size, Some(egui::vec2(1440.0, 900.0)), "builder default; eframe overwrites from storage");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

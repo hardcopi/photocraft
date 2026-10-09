@@ -12,6 +12,7 @@
 //!
 //! One dialog at a time: asking while one is open is refused.
 
+use std::path::Path;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 use photocraft_doc::DocId;
@@ -25,9 +26,27 @@ use crate::file_open::display_name;
 pub enum FileDialogRequest {
     /// Files to read: several for File › Open, one for a command that reads a file (Place,
     /// scripts, notes, presets).
-    Open { multiple: bool },
+    Open {
+        multiple: bool,
+        /// Folder to show first (File › Open last-used directory). `None` uses the platform default.
+        directory: Option<String>,
+    },
     /// Where to write, starting from `suggested` (a file name, or the document's own path).
-    Save { suggested: String },
+    Save {
+        suggested: String,
+        /// Folder to show first (last Save / Save As directory). `None` uses the platform default.
+        directory: Option<String>,
+    },
+}
+
+impl FileDialogRequest {
+    pub fn open(multiple: bool) -> Self {
+        Self::Open { multiple, directory: None }
+    }
+
+    pub fn save(suggested: impl Into<String>) -> Self {
+        Self::Save { suggested: suggested.into(), directory: None }
+    }
 }
 
 /// The user's choice (a cancelled dialog answers `None`).
@@ -95,18 +114,26 @@ impl PhotocraftApp {
         if self.file_dialog.is_some() {
             return Err("a file dialog is already open".into());
         }
+        let mut request = request;
+        fill_directory(&mut request, &self.session);
         let kind = match request {
             FileDialogRequest::Open { .. } => "open",
             FileDialogRequest::Save { .. } => "save",
         };
-        let then: Then = Box::new(move |app, answer| answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a)));
+        let is_save = kind == "save";
+        let then: Then = Box::new(move |app, answer| {
+            if let Some(a) = &answer {
+                remember_file_dialog_dir(app, is_save, a);
+            }
+            answer.map_or_else(|| Err(CANCELLED.into()), |a| then(app, a))
+        });
         self.file_dialog = Some(Pending { request: Some(request), answer: None, then });
         Ok(json!({ "fileDialog": kind }))
     }
 
     /// Ask where to save: `then` gets the chosen path.
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Save { suggested: suggested.to_string() }, move |app, answer| match answer {
+        self.ask_file(FileDialogRequest::save(suggested), move |app, answer| match answer {
             FileDialogAnswer::SaveTo(path) => then(app, path),
             _ => Err(UNEXPECTED.into()),
         })
@@ -116,7 +143,7 @@ impl PhotocraftApp {
     /// name (the full path on the desktop) and bytes. A file that can't be read fails with
     /// "<file name>: <why>".
     pub(crate) fn pick_file_bytes(&mut self, then: impl FnOnce(&mut Self, String, Vec<u8>) -> Result<Value, String> + 'static) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Open { multiple: false }, move |app, answer| {
+        self.ask_file(FileDialogRequest::open(false), move |app, answer| {
             let (name, bytes) = read_picked(answer)?;
             then(app, name, bytes)
         })
@@ -124,7 +151,7 @@ impl PhotocraftApp {
 
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
-        self.ask_file(FileDialogRequest::Open { multiple: true }, |app, answer| {
+        self.ask_file(FileDialogRequest::open(true), |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
                     app.open_paths(&paths);
@@ -203,6 +230,40 @@ fn read_picked(answer: FileDialogAnswer) -> Result<(String, Vec<u8>), String> {
         }
         FileDialogAnswer::SaveTo(_) => Err(UNEXPECTED.into()),
     }
+}
+
+fn fill_directory(request: &mut FileDialogRequest, session: &photocraft_engine::Session) {
+    let fh = &session.prefs().file_handling;
+    match request {
+        FileDialogRequest::Open { directory, .. } if directory.is_none() && !fh.last_open_dir.is_empty() => {
+            *directory = Some(fh.last_open_dir.clone());
+        }
+        FileDialogRequest::Save { directory, .. } if directory.is_none() && !fh.last_save_dir.is_empty() => {
+            *directory = Some(fh.last_save_dir.clone());
+        }
+        _ => {}
+    }
+}
+
+fn remember_file_dialog_dir(app: &mut PhotocraftApp, is_save: bool, answer: &FileDialogAnswer) {
+    let path = match answer {
+        FileDialogAnswer::Paths(paths) => paths.first().map(String::as_str),
+        FileDialogAnswer::SaveTo(path) => Some(path.as_str()),
+        FileDialogAnswer::Contents(_, _) => None,
+    };
+    let Some(path) = path else { return };
+    let Some(parent) = Path::new(path).parent() else { return };
+    if parent.as_os_str().is_empty() {
+        return;
+    }
+    let dir = parent.to_string_lossy().into_owned();
+    app.session.prefs.edit(|p| {
+        if is_save {
+            p.file_handling.last_save_dir = dir;
+        } else {
+            p.file_handling.last_open_dir = dir;
+        }
+    });
 }
 
 /// A fake dialog service for tests: answers each request with the next of `answers` (`None`:

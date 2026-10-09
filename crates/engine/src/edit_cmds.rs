@@ -32,7 +32,7 @@ fn has_doc(s: &Session) -> std::result::Result<(), String> {
 
 /// Paste and New from Clipboard need only a clipboard: with no document open, they make one.
 fn has_clip_only(s: &Session) -> std::result::Result<(), String> {
-    s.clipboard.as_ref().map(|_| ()).ok_or_else(|| "the clipboard is empty".into())
+    if s.clipboard.is_some() || s.layer_clipboard.is_some() { Ok(()) } else { Err("the clipboard is empty".into()) }
 }
 
 fn active_layer(s: &Session) -> std::result::Result<&Layer, String> {
@@ -57,7 +57,16 @@ fn has_layer_pixels(s: &Session) -> std::result::Result<(), String> {
 
 fn has_clip(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
-    s.clipboard.as_ref().map(|_| ()).ok_or_else(|| "the clipboard is empty".into())
+    has_clip_only(s)
+}
+
+fn can_copy(s: &Session) -> std::result::Result<(), String> {
+    let d = s.active().ok_or("no document open")?;
+    if d.doc.selection.is_some() {
+        has_layer_pixels(s)
+    } else {
+        d.active_layer.filter(|id| d.doc.layer(*id).is_some()).map(|_| ()).ok_or_else(|| "no active layer".into())
+    }
 }
 
 fn active_id(s: &Session) -> Result<LayerId> {
@@ -110,7 +119,7 @@ fn merged_surface(doc: &Document) -> Surface {
     photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None)
 }
 
-fn copy(s: &mut Session, merged: bool) -> Result<Value> {
+fn lift_copy(s: &Session, merged: bool) -> Result<Clip> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();
     let clip = if merged {
@@ -123,9 +132,36 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     if clip.bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
+    Ok(clip)
+}
+
+fn copy_pixels(s: &mut Session, merged: bool) -> Result<Value> {
+    let clip = lift_copy(s, merged)?;
     let b = clip.bounds;
     s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
+}
+
+fn copy_layers(s: &mut Session) -> Result<Value> {
+    let d = s.active().ok_or(EngineError::NoDocument)?;
+    let ids = d.selected_layers();
+    let clip = crate::layer_copy_cmds::pack_layers(&d.doc, &ids)?;
+    let n = clip.copies.layers.len();
+    s.layer_clipboard = Some(clip);
+    s.clipboard = lift_copy(s, false).ok();
+    Ok(json!({"kind": "layers", "layers": n}))
+}
+
+fn copy(s: &mut Session, merged: bool) -> Result<Value> {
+    if merged {
+        s.layer_clipboard = None;
+        return copy_pixels(s, true);
+    }
+    if s.active().is_some_and(|d| d.doc.selection.is_some()) {
+        s.layer_clipboard = None;
+        return copy_pixels(s, false);
+    }
+    copy_layers(s)
 }
 
 fn clear_selected(doc: &mut Document, id: LayerId, background: [f32; 4]) -> Result<()> {
@@ -152,7 +188,6 @@ pub(crate) fn clear_area(doc: &mut Document, id: LayerId, area: Rect, sel: Optio
 /// Paste as a new layer (or into the targeted mask or channel: [`paste_to_target`]). `in_place` keeps the original position; otherwise the pixels are centred
 /// on `center` (the view centre from the UI) or the canvas, unless they already overlap the canvas.
 fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
-    let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let Some(d) = s.active() else {
         // Nothing open to paste into: the clipboard becomes a document of its own (#368).
         return new_from_clipboard(s);
@@ -160,6 +195,10 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return paste_to_target(s, p, in_place, None, "Paste");
     }
+    if s.layer_clipboard.is_some() {
+        return crate::layer_copy_cmds::paste_clip(s, p, in_place);
+    }
+    let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
     let (dx, dy) = paste_offset(&clip, canvas, p, in_place);
@@ -219,6 +258,9 @@ pub(crate) fn paste_to_target(s: &mut Session, p: &Value, in_place: bool, limit:
 /// A new document the size of the clipboard image, holding it as its one layer, in the pixel
 /// format it was copied in (#368).
 fn new_from_clipboard(s: &mut Session) -> Result<Value> {
+    if s.layer_clipboard.is_some() {
+        return crate::layer_copy_cmds::new_from_clip(s);
+    }
     let clip = s.clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
     let b = clip.bounds;
     let (w, h) = (b.width(), b.height());
@@ -541,12 +583,13 @@ pub fn specs() -> Vec<CommandSpec> {
             // Refuse a locked layer before copying, so a refused Cut leaves the clipboard alone.
             let id = active_id(s)?;
             crate::commands::check_pixels_unlocked(&s.active().ok_or(EngineError::NoDocument)?.doc, id)?;
-            let r = copy(s, false)?;
+            s.layer_clipboard = None;
+            let r = copy_pixels(s, false)?;
             let bg = s.tools.background;
             s.edit("Cut Pixels", |doc, _| clear_selected(doc, id, bg))?;
             Ok(r)
         }),
-        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", has_layer_pixels, |s, _| copy(s, false)),
+        spec!("edit.copy", "Copy", &["Edit"], Some("Cmd+C"), "{}", can_copy, |s, _| copy(s, false)),
         spec!("edit.copyMerged", "Copy Merged", &["Edit"], Some("Cmd+Shift+C"), "{}", has_doc, |s, _| copy(s, true)),
         spec!(
             "edit.paste",
@@ -950,9 +993,9 @@ mod tests {
         let mut s = session();
         s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
         assert!(s.is_enabled("edit.copy"));
-        assert_eq!(s.execute("edit.copy", json!({})).unwrap()["bounds"], json!([10, 10, 40, 20]), "no selection: the whole layer");
+        assert_eq!(s.execute("edit.copy", json!({})).unwrap()["kind"], "layers", "no selection: the whole layer");
         s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
-        assert!(matches!(active_content(&s), LayerContent::Raster(_)));
+        assert!(matches!(active_content(&s), LayerContent::Smart(_)), "paste keeps the smart object");
         assert_eq!(active_bounds(&s), Rect::new(10, 10, 50, 30));
         assert_eq!(
             s.active().unwrap().doc.layer(s.active().unwrap().active_layer.unwrap()).unwrap().surface().unwrap().pixel(20, 20),
@@ -981,7 +1024,31 @@ mod tests {
         assert!(!s.is_enabled("edit.cut"));
         assert!(s.execute("edit.copy", json!({})).is_ok());
         s.execute("layer.groupLayers", json!({})).unwrap();
-        assert!(!s.is_enabled("edit.copy"));
+        assert!(s.is_enabled("edit.copy"), "a group copies as whole layers");
+        assert_eq!(s.execute("edit.copy", json!({})).unwrap()["kind"], "layers");
+    }
+
+    #[test]
+    fn copy_without_selection_pastes_the_whole_layer_into_another_document() {
+        let mut s = session();
+        let (name, bounds) = {
+            let st = s.active().unwrap();
+            let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+            (l.name.clone(), l.surface().unwrap().content_bounds())
+        };
+        assert_eq!(s.execute("edit.copy", json!({})).unwrap()["kind"], "layers");
+        s.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+        s.execute("edit.pasteSpecial.pasteInPlace", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(l.name, name);
+        assert!(matches!(l.content, LayerContent::Raster(_)));
+        assert_eq!(l.surface().unwrap().content_bounds(), bounds);
+        s.execute("type.create", json!({"text": "Hi", "size": 30, "x": 20, "y": 60})).unwrap();
+        s.execute("edit.copy", json!({})).unwrap();
+        s.set_active(0);
+        s.execute("edit.paste", json!({})).unwrap();
+        assert!(matches!(active_content(&s), LayerContent::Text(_)), "type pastes as type");
     }
 
     #[test]

@@ -15,16 +15,16 @@ note = "Fill (fill_ui.rs:72) and Liquify (liquify_ui.rs:64, #418) keep their set
 [[item]]
 id = "UI-217-2"
 target = "Window size and dock width remembered across restarts"
-status = "missing"
+status = "done"
 issue = 217
-note = "main.rs:46 native_options(): fixed 1440x900, centred on the main monitor (#419); dock.rs:529 snapshot omits the width"
+note = "main.rs restore_window_placement: first launch centres at 1440x900 (#419); a saved ui.ron window is not recentred. dock.rs snapshot stores dockWidth in prefs.panelLayout and restore applies it via pending_dock_width"
 
 [[item]]
 id = "UI-217-3"
 target = "File > Open starts in the last-used folder"
-status = "missing"
+status = "done"
 issue = 217
-note = "services.rs:110 FileDialog::new() without set_directory"
+note = "file_dialog.rs remembers fileHandling.lastOpenDir / lastSaveDir; services.rs set_directory when that folder exists"
 
 [[item]]
 id = "UI-217-4"
@@ -155,13 +155,13 @@ note = "edit_menu_cmds.rs:714 covers brushes, custom shapes, patterns with reord
 [[item]]
 id = "UI-217-22"
 target = "Stamp Visible into a new layer keeping originals; Alt+Merge keeps originals"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only layer.mergeVisible (edit_cmds.rs:416)"
+note = "layer.stampVisible on the Layer menu (Cmd+Alt+Shift+E); Alt+Merge Visible/Down still map to stampVisible/stampDown (stamp_cmds.rs)"
 
 [[item]]
 id = "UI-217-23"
 target = "Layer clipboard: copy/paste whole layers (masks, styles, type) between documents"
-status = "missing"
+status = "done"
 issue = 217
-note = "Only copy/paste layer style (extra_cmds.rs:592)"
+note = "Edit Copy with no pixel selection stores Session.layer_clipboard (pack_layers); Paste inserts like layer.copyToDocument. Selection and Copy Merged stay pixel clips"

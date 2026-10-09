@@ -9,12 +9,22 @@
 //! black point compensation) and bit depth, as Photoshop converts dragged layers.
 
 use photocraft_color::ColorMode;
-use photocraft_doc::{Document, LayerId};
+use photocraft_doc::{Document, LayerId, Pattern};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
+
+/// Whole layers on the session clipboard (Edit › Copy with no pixel selection).
+#[derive(Clone, Debug)]
+pub struct LayerClip {
+    /// Scratch document holding the duplicated layers, in the source's colour.
+    pub copies: Document,
+    pub patterns: Vec<Pattern>,
+    /// Indices into `copies.layers` that were the source Background (renamed on insert).
+    pub from_background: Vec<usize>,
+}
 
 const CMD: &str = "layer.copyToDocument";
 
@@ -57,6 +67,138 @@ fn center(r: Rect) -> [f64; 2] {
     [(f64::from(r.x0) + f64::from(r.x1)) / 2.0, (f64::from(r.y0) + f64::from(r.y1)) / 2.0]
 }
 
+/// Duplicate `ids` (top-level only) into a clipboard payload. A Background becomes an ordinary layer.
+pub(crate) fn pack_layers(sdoc: &Document, ids: &[LayerId]) -> Result<LayerClip> {
+    if !layered(sdoc.mode) {
+        return Err(EngineError::Other(format!("layers can't be copied with a {:?} source document", sdoc.mode)));
+    }
+    if let Some(missing) = ids.iter().find(|id| sdoc.layer(**id).is_none()) {
+        return Err(EngineError::NoLayer(*missing));
+    }
+    let ids = crate::layer_multi_cmds::top_level(sdoc, ids);
+    if ids.is_empty() {
+        return Err(EngineError::Other("no layers to copy".into()));
+    }
+    let mut copies = Document::new("", sdoc.size, sdoc.mode, sdoc.depth);
+    copies.icc_profile = sdoc.icc_profile.clone();
+    // Type re-lays out at the source's resolution, so it keeps its size in pixels.
+    copies.resolution_dpi = sdoc.resolution_dpi;
+    let mut from_background = Vec::new();
+    for id in &ids {
+        let src_layer = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
+        let mut l = src_layer.duplicate();
+        if crate::extra_cmds::is_background(src_layer) && sdoc.layers.first().is_some_and(|b| b.id == *id) {
+            l.locks = Default::default();
+            from_background.push(copies.layers.len());
+        }
+        copies.layers.push(l);
+    }
+    Ok(LayerClip { copies, patterns: sdoc.patterns.clone(), from_background })
+}
+
+/// Insert `clip` above the destination's active layer. `restore_active` is the document to
+/// reactivate when the edit fails (the source of a drag).
+pub(crate) fn insert_layers(s: &mut Session, dest: usize, clip: &LayerClip, dx: i32, dy: i32, label: &str, restore_active: Option<usize>) -> Result<Value> {
+    let ddoc = s.documents().get(dest).ok_or(EngineError::NoDocument)?.doc.clone();
+    if !layered(ddoc.mode) {
+        return Err(EngineError::Other(format!("layers can't be copied with a {:?} destination document", ddoc.mode)));
+    }
+    let mut copies = clip.copies.clone();
+    if (copies.mode, &copies.icc_profile) != (ddoc.mode, &ddoc.icc_profile) {
+        let profile = crate::color_cmds::document_profile(&ddoc);
+        crate::color_cmds::convert_document(&mut copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
+    }
+    if copies.depth != ddoc.depth {
+        crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {
+            let f = surf.format().with_sample(ddoc.depth);
+            *surf = surf.convert(f);
+        });
+    }
+    if dx != 0 || dy != 0 {
+        let snapshot = copies.clone();
+        for l in &mut copies.layers {
+            crate::commands::translate_layer(&snapshot, l, dx, dy);
+            crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
+        }
+    }
+    let patterns: Vec<_> = clip.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
+    let from_background = clip.from_background.clone();
+    s.set_active(dest);
+    let edited = s.edit(label, |doc, active| {
+        doc.patterns.extend(patterns);
+        let mut above = *active;
+        let mut new = Vec::with_capacity(copies.layers.len());
+        for (i, mut l) in copies.layers.into_iter().enumerate() {
+            if from_background.contains(&i) {
+                l.name = doc.next_layer_name("Layer");
+                l.locks = Default::default();
+            }
+            let id = doc.insert_above(above, l);
+            above = Some(id);
+            new.push(id);
+        }
+        *active = above;
+        Ok(new)
+    });
+    if edited.is_err()
+        && let Some(src) = restore_active
+    {
+        s.set_active(src);
+    }
+    let new = edited?;
+    let last = new.last().copied();
+    crate::layer_multi_cmds::reselect(s, new.clone(), last);
+    Ok(json!({"document": dest, "layers": new.iter().map(|l| l.0).collect::<Vec<_>>(), "offset": [dx, dy]}))
+}
+
+fn content_bounds(clip: &LayerClip) -> Rect {
+    let bounds = clip.copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
+    if bounds.is_empty() { clip.copies.bounds() } else { bounds }
+}
+
+/// Paste the layer clipboard into the active document, or make a document when none is open.
+pub(crate) fn paste_clip(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
+    let clip = s.layer_clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    let Some(dest) = s.active_index() else {
+        return new_from_clip(s);
+    };
+    let canvas = s.documents()[dest].doc.bounds();
+    let content = content_bounds(&clip);
+    let (dx, dy) = if in_place || (content.intersect(&canvas) == content && p.get("center").is_none()) {
+        (0, 0)
+    } else {
+        let c = p.get("center").and_then(Value::as_array).filter(|a| a.len() >= 2).map(|a| (a[0].as_f64().unwrap_or(0.0), a[1].as_f64().unwrap_or(0.0)));
+        let (cx, cy) = c.unwrap_or(((canvas.x0 + canvas.x1) as f64 / 2.0, (canvas.y0 + canvas.y1) as f64 / 2.0));
+        let mid = center(content);
+        ((cx - mid[0]).round() as i32, (cy - mid[1]).round() as i32)
+    };
+    insert_layers(s, dest, &clip, dx, dy, "Paste", None)
+}
+
+/// A new document holding the layer clipboard, at the source canvas size.
+pub(crate) fn new_from_clip(s: &mut Session) -> Result<Value> {
+    let clip = s.layer_clipboard.clone().ok_or(EngineError::Other("the clipboard is empty".into()))?;
+    let src = &clip.copies;
+    let (w, h) = (src.size.width, src.size.height);
+    if w == 0 || h == 0 {
+        return Err(EngineError::Other("the clipboard image has no size".into()));
+    }
+    let mut doc = Document::new("Untitled", src.size, src.mode, src.depth);
+    doc.icc_profile = src.icc_profile.clone();
+    doc.resolution_dpi = src.resolution_dpi;
+    doc.layers = src.layers.clone();
+    doc.patterns = clip.patterns.clone();
+    for i in clip.from_background.clone() {
+        let name = doc.next_layer_name("Layer");
+        if let Some(l) = doc.layers.get_mut(i) {
+            l.name = name;
+            l.locks = Default::default();
+        }
+    }
+    let i = s.add_document(doc, None);
+    Ok(json!({"document": i, "width": w, "height": h}))
+}
+
 /// `layer.copyToDocument`.
 fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
     let dest = doc_index(s, p, "document")?.ok_or_else(|| bad("missing `document` (the destination's index)"))?;
@@ -89,36 +231,10 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::Other(format!("layers can't be copied with a {:?} {role} document", doc.mode)));
         }
     }
-    // The copies, bottom to top, in a scratch document of the source's colour so they convert
-    // the way a whole document does.
-    let mut copies = Document::new("", sdoc.size, sdoc.mode, sdoc.depth);
-    copies.icc_profile = sdoc.icc_profile.clone();
-    // Type re-lays out at the source's resolution, so it keeps its size in pixels.
-    copies.resolution_dpi = sdoc.resolution_dpi;
-    for id in &ids {
-        let src_layer = sdoc.layer(*id).ok_or(EngineError::NoLayer(*id))?;
-        let mut l = src_layer.duplicate();
-        // A dragged Background arrives as an ordinary layer (the destination keeps its own).
-        if crate::extra_cmds::is_background(src_layer) && sdoc.layers.first().is_some_and(|b| b.id == *id) {
-            l.name = ddoc.next_layer_name("Layer");
-            l.locks = Default::default();
-        }
-        copies.layers.push(l);
-    }
-    if (copies.mode, &copies.icc_profile) != (ddoc.mode, &ddoc.icc_profile) {
-        let profile = crate::color_cmds::document_profile(&ddoc);
-        crate::color_cmds::convert_document(&mut copies, &profile, s.color.settings.intent(), s.color.settings.bpc)?;
-    }
-    if copies.depth != ddoc.depth {
-        crate::image_cmds::for_each_surface(&mut copies.layers, true, &mut |surf, _| {
-            let f = surf.format().with_sample(ddoc.depth);
-            *surf = surf.convert(f);
-        });
-    }
+    let clip = pack_layers(&sdoc, &ids)?;
     // Placement: centred on the destination's canvas, centred on a point, or offset from where
     // the layers are in the source (default: the same canvas position).
-    let bounds = copies.layers.iter().filter_map(crate::layer_multi_cmds::layer_bounds).fold(Rect::EMPTY, |a, b| a.union(&b));
-    let content = if bounds.is_empty() { sdoc.bounds() } else { bounds };
+    let content = content_bounds(&clip);
     let (dx, dy) = if p.get("center").and_then(Value::as_bool).unwrap_or(false) {
         let (c, d) = (center(content), center(ddoc.bounds()));
         (d[0] - c[0], d[1] - c[1])
@@ -129,36 +245,8 @@ fn copy_to_document(s: &mut Session, p: &Value) -> Result<Value> {
         point(p, "offset")?.map_or((0.0, 0.0), |o| (o[0], o[1]))
     };
     let (dx, dy) = (dx.round() as i32, dy.round() as i32);
-    if dx != 0 || dy != 0 {
-        let snapshot = copies.clone();
-        for l in &mut copies.layers {
-            crate::commands::translate_layer(&snapshot, l, dx, dy);
-            crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
-        }
-    }
-    let patterns: Vec<_> = sdoc.patterns.iter().filter(|pat| !ddoc.patterns.iter().any(|d| d.id == pat.id)).cloned().collect();
-    s.set_active(dest);
     let label = if ids.len() == 1 { "Duplicate Layer" } else { "Duplicate Layers" };
-    let edited = s.edit(label, |doc, active| {
-        doc.patterns.extend(patterns);
-        let mut above = *active;
-        let mut new = Vec::with_capacity(copies.layers.len());
-        for l in copies.layers {
-            let id = doc.insert_above(above, l);
-            above = Some(id);
-            new.push(id);
-        }
-        *active = above;
-        Ok(new)
-    });
-    // Nothing changed: the source stays the active document.
-    if edited.is_err() {
-        s.set_active(src);
-    }
-    let new = edited?;
-    let last = new.last().copied();
-    crate::layer_multi_cmds::reselect(s, new.clone(), last);
-    Ok(json!({"document": dest, "layers": new.iter().map(|l| l.0).collect::<Vec<_>>(), "offset": [dx, dy]}))
+    insert_layers(s, dest, &clip, dx, dy, label, Some(src))
 }
 
 pub fn specs() -> Vec<CommandSpec> {

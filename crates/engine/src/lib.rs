@@ -278,6 +278,8 @@ pub struct Session {
     coalesce_request: Option<String>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
+    /// Whole layers copied with Edit › Copy when there is no pixel selection (masks, styles, type).
+    pub layer_clipboard: Option<layer_copy_cmds::LayerClip>,
     /// Layer › Layer Style › Copy Layer Style: effects, blend mode, fill opacity and the Advanced
     /// Blending switches.
     pub style_clipboard: Option<(photocraft_doc::Effects, photocraft_color::BlendMode, f32, photocraft_doc::AdvancedBlending)>,

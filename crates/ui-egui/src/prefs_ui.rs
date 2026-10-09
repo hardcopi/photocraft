@@ -1012,6 +1012,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
             if prefs::is_hidden(&path)
                 || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
                 || (section == "export" && !export_field_visible(obj, &k))
+                || (section == "fileHandling" && matches!(k.as_str(), "lastOpenDir" | "lastSaveDir"))
             {
                 continue;
             }
@@ -1559,6 +1560,9 @@ mod tests {
                 }
                 let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
                 for k in obj.keys() {
+                    if sec == "fileHandling" && matches!(k.as_str(), "lastOpenDir" | "lastSaveDir") {
+                        continue;
+                    }
                     let mut labels = vec![humanize(k)];
                     labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
                     missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));

@@ -66,7 +66,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         dialog = dialog.set_parent(parent);
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
-        FileDialogRequest::Open { multiple } => {
+        FileDialogRequest::Open { multiple, directory } => {
+            if let Some(dir) = directory.as_ref().filter(|d| Path::new(d).is_dir()) {
+                dialog = dialog.set_directory(dir);
+            }
             let dialog = dialog.add_filter("All Formats", OPEN_EXTS).add_filter("PhotoCraft", &["pcraft"]);
             if multiple {
                 let picked = dialog.pick_files();
@@ -76,7 +79,10 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 Box::pin(async move { picked.await.map(|file| FileDialogAnswer::Paths(vec![path_of(&file)])) })
             }
         }
-        FileDialogRequest::Save { suggested } => {
+        FileDialogRequest::Save { suggested, directory } => {
+            if let Some(dir) = directory.as_ref().filter(|d| Path::new(d).is_dir()) {
+                dialog = dialog.set_directory(dir);
+            }
             for (name, exts) in save_filters(&suggested) {
                 dialog = dialog.add_filter(name, &exts);
             }
@@ -409,7 +415,7 @@ mod tests {
         // Record each save dialog's suggested name and cancel it, as the user would.
         let services = Services {
             file_dialog: Some(Box::new(move |request, _parent, reply| {
-                if let FileDialogRequest::Save { suggested } = request {
+                if let FileDialogRequest::Save { suggested, .. } = request {
                     log.borrow_mut().push(suggested);
                 }
                 reply.send(None);

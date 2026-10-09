@@ -38,7 +38,7 @@ fn the_app_keeps_running_while_a_dialog_is_open() {
     assert_eq!(menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap(), json!({"fileDialog": "save"}));
     assert!(open.borrow().is_empty(), "shown at the end of the frame, which has the window to parent it to");
     app.poll_file_dialog(&ctx, None);
-    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested }, _)] if suggested.ends_with(".psd")));
+    assert!(matches!(open.borrow().as_slice(), [(FileDialogRequest::Save { suggested, .. }, _)] if suggested.ends_with(".psd")));
     // Frames go on while the user is in the dialog: nothing is written, commands still run, and
     // a second dialog is refused.
     for _ in 0..3 {
@@ -63,6 +63,36 @@ fn the_app_keeps_running_while_a_dialog_is_open() {
     assert_eq!(st.path.as_deref(), Some("/pics/a.psd"));
     assert!(!st.is_dirty());
     assert!(!app.file_dialog_open());
+}
+
+#[test]
+fn open_and_save_remember_the_last_folder() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo("/work/shots/out.psd".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_save_dir, "/work/shots");
+    menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    match &open.borrow()[0].0 {
+        FileDialogRequest::Save { directory, .. } => assert_eq!(directory.as_deref(), Some("/work/shots")),
+        other => panic!("expected save, got {other:?}"),
+    }
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::Paths(vec!["/pics/cat.psd".into()])));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(app.session.prefs().file_handling.last_open_dir, "/pics");
+    menus::invoke(&mut app, &ctx, "file.open", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    match &open.borrow()[0].0 {
+        FileDialogRequest::Open { directory, .. } => assert_eq!(directory.as_deref(), Some("/pics")),
+        other => panic!("expected open, got {other:?}"),
+    }
 }
 
 #[test]

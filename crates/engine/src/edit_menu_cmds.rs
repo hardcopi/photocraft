@@ -227,7 +227,11 @@ fn history_bytes(s: &Session, all: bool) -> usize {
 }
 
 fn clip_bytes(s: &Session) -> usize {
-    s.clipboard.as_ref().map_or(0, |c| c.surface.tiles().map(|(_, t)| t.bytes().len()).sum())
+    let pixels = s.clipboard.as_ref().map_or(0, |c| c.surface.tiles().map(|(_, t)| t.bytes().len()).sum());
+    let layers = s.layer_clipboard.as_ref().map_or(0, |c| {
+        c.copies.layers.iter().filter_map(photocraft_doc::Layer::surface).map(|surf| surf.tiles().map(|(_, t)| t.bytes().len()).sum::<usize>()).sum()
+    });
+    pixels + layers
 }
 
 fn purge(s: &mut Session, what: &str) -> Result<Value> {
@@ -241,9 +245,10 @@ fn purge(s: &mut Session, what: &str) -> Result<Value> {
         freed += before.saturating_sub(history_bytes(s, false));
         items.push("undo");
     }
-    if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.style_clipboard.is_some()) {
+    if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.layer_clipboard.is_some() || s.style_clipboard.is_some()) {
         freed += clip_bytes(s);
         s.clipboard = None;
+        s.layer_clipboard = None;
         s.style_clipboard = None;
         items.push("clipboard");
     }
@@ -274,7 +279,7 @@ fn can_purge_undo(s: &Session) -> std::result::Result<(), String> {
     s.active().filter(|d| d.history.can_undo()).map(|_| ()).ok_or_else(|| "nothing to purge".into())
 }
 fn can_purge_clipboard(s: &Session) -> std::result::Result<(), String> {
-    if s.clipboard.is_some() || s.style_clipboard.is_some() { Ok(()) } else { Err("the clipboard is empty".into()) }
+    if s.clipboard.is_some() || s.layer_clipboard.is_some() || s.style_clipboard.is_some() { Ok(()) } else { Err("the clipboard is empty".into()) }
 }
 fn can_purge_histories(s: &Session) -> std::result::Result<(), String> {
     if s.documents().iter().any(|d| d.history.can_undo() || d.history.can_redo()) { Ok(()) } else { Err("no history to purge".into()) }

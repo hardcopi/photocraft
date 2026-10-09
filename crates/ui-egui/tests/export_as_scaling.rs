@@ -23,7 +23,7 @@ fn harness() -> Option<(Harness, Writes)> {
                     // Save dialogs answer with the suggested name.
                     file_dialog: Some(Box::new(|request, _parent, reply| {
                         reply.send(match request {
-                            FileDialogRequest::Save { suggested } => Some(FileDialogAnswer::SaveTo(suggested)),
+                            FileDialogRequest::Save { suggested, .. } => Some(FileDialogAnswer::SaveTo(suggested)),
                             FileDialogRequest::Open { .. } => None,
                         })
                     })),

@@ -439,6 +439,7 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Layer"], "---", None, "---"),
     (&["Layer"], "Merge Layers", Some("Cmd+E"), "layer.mergeLayers"),
     (&["Layer"], "Merge Visible", Some("Cmd+Shift+E"), "layer.mergeVisible"),
+    (&["Layer"], "Stamp Visible", Some("Cmd+Alt+Shift+E"), "layer.stampVisible"),
     (&["Layer"], "Flatten Image", None, "layer.flattenImage"),
     (&["Layer"], "---", None, "---"),
     (&["Layer", "Matting"], "Color Decontaminate…", None, "layer.matting.colorDecontaminate"),

@@ -192,7 +192,7 @@ fn templates_open_as_new_untitled_documents() {
     app.services.file_dialog = Some(show);
     menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
     answer(&mut app);
-    assert_eq!(*asked.borrow(), [FileDialogRequest::Save { suggested: "Untitled-2.psd".into() }]);
+    assert_eq!(*asked.borrow(), [FileDialogRequest::save("Untitled-2.psd")]);
     assert!(written.borrow().is_empty());
 }
 

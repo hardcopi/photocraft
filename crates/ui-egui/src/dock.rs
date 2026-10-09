@@ -529,9 +529,13 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
     }
 }
 
-/// What `prefs.panelLayout` holds: the live layout and open panels.
-fn snapshot(app: &PhotocraftApp) -> Value {
-    json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock})
+/// What `prefs.panelLayout` holds: the live layout, open panels and dock width.
+fn snapshot(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
+    let mut v = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock});
+    if let Some(w) = egui::containers::panel::PanelState::load(ctx, egui::Id::new("dock")).map(|p| p.size().x).filter(|w| w.is_finite()) {
+        v["dockWidth"] = json!(w);
+    }
+    v
 }
 
 /// Remember the layout in the preferences once the user lets go of the mouse (Workspace ›
@@ -540,7 +544,7 @@ pub fn persist(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !app.session.prefs().workspace.remember_workspace_changes || ctx.input(|i| i.pointer.any_down()) {
         return;
     }
-    let now = snapshot(app);
+    let now = snapshot(app, ctx);
     if app.session.prefs().panel_layout != now {
         app.session.prefs.edit(|p| p.panel_layout = now);
     }
@@ -569,6 +573,9 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     }
     if let Some(d) = v.get("dock").and_then(|d| serde_json::from_value(d.clone()).ok()) {
         app.ui.dock = d;
+    }
+    if let Some(w) = v.get("dockWidth").and_then(Value::as_f64).filter(|w| w.is_finite()) {
+        app.pending_dock_width = Some(w as f32);
     }
 }
 
