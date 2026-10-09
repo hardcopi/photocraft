@@ -26,6 +26,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("metadata".into(), json!("none"));
     f.insert("__w".into(), json!(st.doc.size.width));
     f.insert("__h".into(), json!(st.doc.size.height));
+    crate::remember::apply_export_as(app, &mut f);
     Ok(app.ui.open_dialog(DialogKind::Command, f))
 }
 
@@ -244,6 +245,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 
 /// Export with the dialog's settings: choose a path, render, encode, write.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
+    crate::remember::remember_export_as(app, f);
     let doc = source_document(app, f)?;
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a).to_string();
     let ext = s_fmt(f);

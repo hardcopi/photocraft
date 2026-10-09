@@ -109,6 +109,7 @@ pub fn load(app: &mut PhotocraftApp) {
         app.ui.status = format!("Preferences were reset: {e}");
     }
     crate::dock::restore(app);
+    crate::remember::restore(app);
     app.sync_recent();
     app.prefs_rt.saved_rev = app.session.prefs.rev();
     app.prefs_rt.saved_value = Some(app.session.prefs_value());
@@ -221,6 +222,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     presets_store(app);
     sync_tooltips(app, ctx);
     app.sync_recent();
+    crate::remember::persist(app, ctx);
     if let Some(wait) = persist(app, ctx.input(|i| i.time)) {
         ctx.request_repaint_after(std::time::Duration::try_from_secs_f64(wait).unwrap_or_default());
     }

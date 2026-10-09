@@ -725,15 +725,15 @@ pub fn style_label(style: &str) -> String {
 }
 
 /// Searchable font-family combo box.
-fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32) -> bool {
-    font_picker_in(ui, current, width, families())
+fn font_picker(ui: &mut egui::Ui, current: &mut String, width: f32, recents: &[String]) -> bool {
+    font_picker_in(ui, current, width, families(), recents)
 }
 
 /// Maximum height of the font menu.
 const FONT_MENU_HEIGHT: f32 = 460.0;
 
 /// [`font_picker`] over a given family list (tests pass their own).
-fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families: &[String]) -> bool {
+fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families: &[String], recents: &[String]) -> bool {
     let mut changed = false;
     let search_id = ui.id().with("font-search");
     let combo = egui::ComboBox::from_id_salt("type-font")
@@ -765,7 +765,20 @@ fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families:
             d.insert_temp(search_id, q.clone());
         });
         let ql = q.to_lowercase();
-        for f in families.iter().filter(|f| ql.is_empty() || f.to_lowercase().contains(&ql)) {
+        let matches = |f: &str| ql.is_empty() || f.to_lowercase().contains(&ql);
+        let recents_hit: Vec<&String> = recents.iter().filter(|f| families.iter().any(|g| g == *f) && matches(f)).collect();
+        if !recents_hit.is_empty() {
+            for f in &recents_hit {
+                if ui.selectable_label(*f == current, *f).clicked() {
+                    *current = (*f).clone();
+                    changed = true;
+                    ui.data_mut(|d| d.remove::<String>(search_id));
+                    ui.close();
+                }
+            }
+            ui.separator();
+        }
+        for f in families.iter().filter(|f| matches(f) && !recents_hit.contains(f)) {
             if ui.selectable_label(f == current, f).clicked() {
                 *current = f.clone();
                 changed = true;
@@ -882,7 +895,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status_error = true;
         }
     }
-    if font_picker(ui, &mut fam, 170.0) {
+    let recents = crate::remember::recent_fonts(app);
+    if font_picker(ui, &mut fam, 170.0, &recents) {
+        crate::remember::remember_font(app, &fam);
         app.ui.tool_options.type_font = fam.clone();
         let st = styles(&fam);
         style = if st.contains(&style) { style } else { st.first().cloned().unwrap_or_else(|| "Regular".into()) };
@@ -1184,7 +1199,9 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
         let w = field_width(full, 2, LABEL_W);
         let mut fam = c.font_family.clone();
         row(ui, &mut |ui| {
-            if font_picker(ui, &mut fam, full) {
+            let recents = crate::remember::recent_fonts(app);
+            if font_picker(ui, &mut fam, full, &recents) {
+                crate::remember::remember_font(app, &fam);
                 app.ui.tool_options.type_font = fam.clone();
                 let st = styles(&fam);
                 let style = if st.contains(&c.font_style) { c.font_style.clone() } else { st.first().cloned().unwrap_or_else(|| tl!("Regular").into()) };

@@ -22,7 +22,7 @@ fn harness() -> Harness<'static, State> {
             // `ComboBox::from_id_salt` wraps its salt in an `IdSalt`; the popup id is the button's + "popup".
             s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
             let fams = s.families.clone();
-            font_picker_in(ui, &mut s.current, 170.0, &fams);
+            font_picker_in(ui, &mut s.current, 170.0, &fams, &[]);
         },
         state,
     );

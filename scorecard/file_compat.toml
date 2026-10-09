@@ -129,7 +129,7 @@ id = "FILE-215-18"
 target = "Save for Web per-slice settings remembered; Export As remembers and offers nearest scaling"
 status = "partial"
 issue = 215
-note = "file_ui.rs:188 last_web in-session only; export_dialog.rs:16 fixed defaults"
+note = "Save for Web last settings persist in prefs.dialogs (remember.rs); Export As remembers format/quality/scale. Per-slice settings and nearest-scaling picker still missing"
 
 [[item]]
 id = "FILE-215-19"

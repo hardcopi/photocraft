@@ -37,6 +37,19 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     app.ui.brush_tool = tool;
 }
 
+/// Apply the saved brush for the current tool (after restoring `tool_brushes` at launch).
+pub fn load_tool_brush(app: &mut PhotocraftApp) {
+    let tool = app.ui.tool;
+    if !has_brush_picker(tool) {
+        return;
+    }
+    let current = app.session.tools.brush.clone();
+    if let Some((_, b)) = app.ui.tool_brushes.iter().find(|(t, _)| *t == tool) {
+        app.session.tools.brush = session_fields(&current, b);
+    }
+    app.ui.brush_tool = tool;
+}
+
 /// The brush `tool` had when it was last active.
 fn save_brush(app: &mut PhotocraftApp, tool: Tool, brush: BrushSettings) {
     match app.ui.tool_brushes.iter_mut().find(|(t, _)| *t == tool) {

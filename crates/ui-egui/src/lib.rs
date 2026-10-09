@@ -109,6 +109,7 @@ pub mod proxy;
 pub mod puppet_ui;
 pub mod quick_pick;
 pub mod rasterize_prompt;
+pub(crate) mod remember;
 pub mod retouch_ui;
 mod rgb_histogram;
 pub mod rotate_view;

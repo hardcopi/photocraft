@@ -157,7 +157,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 }
 
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
-    if f.contains_key("__web") { web_confirm(app, f) } else { print_confirm(app, f) }
+    if f.contains_key("__web") {
+        crate::remember::remember_save_for_web(app, &params(f));
+        web_confirm(app, f)
+    } else {
+        print_confirm(app, f)
+    }
 }
 
 fn params(f: &Map<String, Value>) -> Value {
