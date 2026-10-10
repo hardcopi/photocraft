@@ -200,6 +200,20 @@ pub fn finish_content_aware_move(app: &mut PhotocraftApp, start: [f64; 2], end: 
     if let Err(e) = app.run("paint.contentAwareMove", p) {
         app.ui.status = e;
         app.ui.status_error = true;
+        return;
+    }
+    // Tests and wasm run the command inline; the desktop job starts Free Transform when it lands.
+    if app.ui.tool_options.cam_transform_on_drop && !app.background_jobs {
+        begin_cam_transform(app, &egui::Context::default());
+    }
+}
+
+/// Free Transform the moved selection (Transform On Drop). Failures stay in the status bar; the
+/// move itself already landed.
+pub(crate) fn begin_cam_transform(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    if let Err(e) = crate::transform_tool::begin(app, ctx) {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
@@ -306,6 +320,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             opt(ui, tl!("Color:"));
             crate::widgets::value_field(ui, &mut o.cam_color, 0.0..=10.0, "", 40.0);
             crate::widgets::checkbox(ui, &mut o.sample_all_layers, tl!("Sample All Layers"));
+            crate::widgets::checkbox(ui, &mut o.cam_transform_on_drop, tl!("Transform On Drop"));
             crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Lasso around an area, then drag the selection"));
         }
@@ -611,6 +626,28 @@ mod tests {
             let sel = app.session.active().unwrap().doc.selection.as_ref().unwrap();
             assert!(sel.sample_channel(72, 30, 0) > 0.0 && sel.sample_channel(22, 30, 0) == 0.0, "{mode}: the selection follows");
         }
+    }
+
+    #[test]
+    fn content_aware_move_transform_on_drop_opens_the_box() {
+        let mut app = app();
+        app.run("paint.pencil", json!({"points": [[20, 30], [24, 30]], "size": 6, "color": "#0000ff"})).unwrap();
+        app.ui.tool = Tool::ContentAwareMove;
+        app.ui.tool_options.cam_structure = 7.0;
+        app.ui.tool_options.cam_transform_on_drop = true;
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 12.0, y: 20.0, pressure: 1.0 }, m);
+        for [x, y] in [[32.0, 20.0], [32.0, 40.0], [12.0, 40.0]] {
+            tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
+        }
+        tool_event(&mut app, ToolEvent::Up { x: 12.0, y: 40.0 }, m);
+        tool_event(&mut app, ToolEvent::Down { x: 22.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 31.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 72.0, y: 30.0 }, m);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let t = app.ui.transform.as_ref().expect("Transform On Drop opens the box");
+        assert!(t.quad[0][0] < t.quad[1][0], "the box covers the moved selection");
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.contentAwareMove"));
     }
 
     #[test]

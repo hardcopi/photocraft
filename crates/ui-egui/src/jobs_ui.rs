@@ -382,6 +382,14 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         return;
     }
     match e.outcome {
+        JobOutcome::Done(_) if e.command == "paint.contentAwareMove" => {
+            app.sync_views();
+            app.ui.status = e.label;
+            app.ui.status_error = false;
+            if app.ui.tool_options.cam_transform_on_drop {
+                crate::retouch_ui::begin_cam_transform(app, ctx);
+            }
+        }
         JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();

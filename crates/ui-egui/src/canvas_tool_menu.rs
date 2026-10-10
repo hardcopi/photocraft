@@ -40,7 +40,8 @@ impl CanvasToolMenu {
 /// One menu row: label and command id. `None` is a separator.
 pub type Row = Option<(&'static str, &'static str)>;
 
-/// Right-click while transforming: what the box's handles do.
+/// Right-click while transforming: Photoshop's Free Transform context menu (modes, then Warp,
+/// then the rotate/flip presets that apply to the live box).
 pub const TRANSFORM_MENU: &[Row] = &[
     Some(("Free Transform", "edit.freeTransform")),
     Some(("Scale", "edit.transform.scale")),
@@ -48,6 +49,13 @@ pub const TRANSFORM_MENU: &[Row] = &[
     Some(("Skew", "edit.transform.skew")),
     Some(("Distort", "edit.transform.distort")),
     Some(("Perspective", "edit.transform.perspective")),
+    Some(("Warp", "edit.transform.warp")),
+    None,
+    Some(("Rotate 180°", "edit.transform.rotate180")),
+    Some(("Rotate 90° Clockwise", "edit.transform.rotate90Cw")),
+    Some(("Rotate 90° Counter Clockwise", "edit.transform.rotate90Ccw")),
+    Some(("Flip Horizontal", "edit.transform.flipHorizontal")),
+    Some(("Flip Vertical", "edit.transform.flipVertical")),
 ];
 
 /// Photoshop's selection-tool context menu with an active selection, in its order. Its Generative
@@ -200,10 +208,29 @@ pub fn available(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> b
 
 /// Is `command` the transform box's current mode (checked in the transform menu)?
 /// Scale and Rotate are Free Transform's mode, so only Free Transform shows it checked.
+/// Warp is its own overlay (`t.warp`), not a `TransformMode`. Flip / rotate-90 are one-shot
+/// presets, never a mode.
 fn mode_checked(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
-    menu.transform
-        && !matches!(command, "edit.transform.scale" | "edit.transform.rotate")
-        && app.ui.transform.as_ref().is_some_and(|t| t.mode == crate::state::TransformMode::for_command(command))
+    if !menu.transform {
+        return false;
+    }
+    let Some(t) = app.ui.transform.as_ref() else { return false };
+    if command == "edit.transform.warp" {
+        return t.warp.is_some();
+    }
+    if matches!(
+        command,
+        "edit.transform.scale"
+            | "edit.transform.rotate"
+            | "edit.transform.rotate180"
+            | "edit.transform.rotate90Cw"
+            | "edit.transform.rotate90Ccw"
+            | "edit.transform.flipHorizontal"
+            | "edit.transform.flipVertical"
+    ) {
+        return false;
+    }
+    t.warp.is_none() && t.mode == crate::state::TransformMode::for_command(command)
 }
 
 /// Right-click over a Free Transform box: its modes.
@@ -565,6 +592,28 @@ mod tests {
 
     fn labels(rows: &[Row]) -> Vec<Option<&str>> {
         rows.iter().map(|row| row.map(|(label, _)| label)).collect()
+    }
+
+    #[test]
+    fn transform_menu_follows_photoshop_order() {
+        assert_eq!(
+            labels(TRANSFORM_MENU),
+            vec![
+                Some("Free Transform"),
+                Some("Scale"),
+                Some("Rotate"),
+                Some("Skew"),
+                Some("Distort"),
+                Some("Perspective"),
+                Some("Warp"),
+                None,
+                Some("Rotate 180°"),
+                Some("Rotate 90° Clockwise"),
+                Some("Rotate 90° Counter Clockwise"),
+                Some("Flip Horizontal"),
+                Some("Flip Vertical"),
+            ]
+        );
     }
 
     #[test]

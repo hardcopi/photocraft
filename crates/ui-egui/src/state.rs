@@ -480,6 +480,8 @@ pub struct ToolOptions {
     pub cam_mode: String,
     pub cam_structure: f32,
     pub cam_color: f32,
+    /// After a drop, open Free Transform on the moved selection (Photoshop's Transform On Drop).
+    pub cam_transform_on_drop: bool,
     /// Dodge/Burn: shadows | midtones | highlights, exposure %, protect tones.
     pub tone_range: String,
     pub exposure: f32,
@@ -638,6 +640,7 @@ impl Default for ToolOptions {
             cam_mode: "move".into(),
             cam_structure: 4.0,
             cam_color: 0.0,
+            cam_transform_on_drop: false,
             tone_range: "midtones".into(),
             exposure: 50.0,
             protect_tones: true,

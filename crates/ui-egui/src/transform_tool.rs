@@ -760,15 +760,62 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
 
 /// While transforming, the box owns the history for every caller (menus, shortcuts, the control
 /// channel, MCP): Undo and Redo step through it, and Toggle Last State, which would change the
-/// document under the box, is refused. `None` for other commands or when not transforming.
+/// document under the box, is refused. Flip / rotate-90 presets apply to the live box instead of
+/// committing through the engine. `None` for other commands or when not transforming.
 pub fn intercept(app: &mut PhotocraftApp, id: &str) -> Option<Result<serde_json::Value, String>> {
     app.ui.transform.as_ref()?;
     match id {
         "edit.undo" => Some(Ok(step(app, false))),
         "edit.redo" => Some(Ok(step(app, true))),
         "edit.toggleLastState" => Some(Err("Commit or cancel the transform first".into())),
+        "edit.transform.rotate180"
+        | "edit.transform.rotate90Cw"
+        | "edit.transform.rotate90Ccw"
+        | "edit.transform.flipHorizontal"
+        | "edit.transform.flipVertical" => Some(Ok(apply_preset(app, id))),
         _ => None,
     }
+}
+
+/// Affine `[a, b, c, d, e, f]` (`x' = a·x + c·y + e`) around the current box AABB, matching
+/// `extra_cmds::transform_preset` so a committed flip/rotate-90 is the same permutation.
+fn preset_matrix(kind: &str, quad: [[f64; 2]; 4]) -> [f64; 6] {
+    let mut x0 = f64::INFINITY;
+    let mut y0 = f64::INFINITY;
+    let mut x1 = f64::NEG_INFINITY;
+    let mut y1 = f64::NEG_INFINITY;
+    for p in quad {
+        x0 = x0.min(p[0]);
+        y0 = y0.min(p[1]);
+        x1 = x1.max(p[0]);
+        y1 = y1.max(p[1]);
+    }
+    let (sx, sy) = (x0 + x1, y0 + y1);
+    let (cx, cy) = (sx / 2.0, sy / 2.0);
+    match kind {
+        "rotate180" => [-1.0, 0.0, 0.0, -1.0, sx, sy],
+        "rotate90Cw" => [0.0, 1.0, -1.0, 0.0, (cx + cy).round(), (cy - cx).round()],
+        "rotate90Ccw" => [0.0, -1.0, 1.0, 0.0, (cx - cy).round(), (cx + cy).round()],
+        "flipHorizontal" => [-1.0, 0.0, 0.0, 1.0, sx, 0.0],
+        _ => [1.0, 0.0, 0.0, -1.0, 0.0, sy],
+    }
+}
+
+fn affine(p: [f64; 2], m: [f64; 6]) -> [f64; 2] {
+    [m[0] * p[0] + m[2] * p[1] + m[4], m[1] * p[0] + m[3] * p[1] + m[5]]
+}
+
+/// Apply Edit › Transform › Flip / Rotate 90/180 to the open box (and its warp, if any).
+fn apply_preset(app: &mut PhotocraftApp, id: &str) -> serde_json::Value {
+    let Some(t) = app.ui.transform.as_mut() else { return serde_json::Value::Null };
+    let kind = id.strip_prefix("edit.transform.").unwrap_or(id);
+    let m = preset_matrix(kind, t.quad);
+    t.quad = t.quad.map(|p| affine(p, m));
+    t.pivot = affine(t.pivot, m);
+    if let Some(w) = t.warp.take() {
+        t.warp = Some(w.then_affine(m));
+    }
+    json!({"transform": t})
 }
 
 /// Undo (or redo) one step of the open session; nothing mid-drag or with no step to take.
@@ -2700,8 +2747,42 @@ mod tests {
         let menu = app.ui.canvas_tool_menu.clone().unwrap();
         let ids: Vec<&str> = crate::canvas_tool_menu::rows(&menu).iter().flatten().map(|e| e.1).collect();
         assert!(ids.contains(&"edit.transform.distort") && ids.contains(&"edit.freeTransform"));
+        assert!(ids.contains(&"edit.transform.warp") && ids.contains(&"edit.transform.flipHorizontal"));
         crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.distort");
         assert_eq!(app.ui.transform.as_ref().unwrap().mode, TransformMode::Distort);
+    }
+
+    #[test]
+    fn flip_and_rotate90_apply_to_the_open_box_without_committing() {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap();
+        let journal = app.session.journal.len();
+        assert!(crate::canvas_tool_menu::open_transform(&mut app, [10.0, 10.0]));
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.flipHorizontal");
+        let t = app.ui.transform.as_ref().unwrap();
+        assert_eq!(t.quad, [[24.0, 8.0], [8.0, 8.0], [8.0, 24.0], [24.0, 24.0]]);
+        assert_eq!(t.pivot, [16.0, 16.0]);
+        assert_eq!(app.session.journal.len(), journal, "the preset must not commit the layer");
+        assert!(crate::canvas_tool_menu::open_transform(&mut app, [10.0, 10.0]));
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.flipHorizontal");
+        assert_eq!(app.ui.transform.as_ref().unwrap().quad, corners([8.0, 8.0, 24.0, 24.0]));
+        for _ in 0..4 {
+            app.run("edit.transform.rotate90Cw", json!({})).unwrap();
+        }
+        assert_eq!(app.ui.transform.as_ref().unwrap().quad, corners([8.0, 8.0, 24.0, 24.0]));
+        assert!(crate::canvas_tool_menu::open_transform(&mut app, [10.0, 10.0]));
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.warp");
+        assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
+        app.run("edit.transform.flipVertical", json!({})).unwrap();
+        let t = app.ui.transform.as_ref().unwrap();
+        assert!(t.warp.is_some(), "flip keeps warp mode");
+        assert_eq!(t.quad, [[8.0, 24.0], [24.0, 24.0], [24.0, 8.0], [8.0, 8.0]]);
+        assert!(crate::canvas_tool_menu::open_transform(&mut app, [10.0, 10.0]));
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.freeTransform");
+        let t = app.ui.transform.as_ref().unwrap();
+        assert!(t.warp.is_none());
+        assert_eq!(t.mode, TransformMode::Free);
     }
 
     fn app_with_square(size: u32, fill: photocraft_geom::Rect) -> PhotocraftApp {

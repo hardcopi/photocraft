@@ -430,10 +430,12 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         | "edit.transform.distort"
         | "edit.transform.perspective" => {
             // While a box is up, Scale / Rotate / Skew / Distort / Perspective (and Free Transform)
-            // switch its mode; otherwise they start one in that mode.
+            // switch its mode (leaving Warp, like Photoshop's context menu); otherwise they start
+            // one in that mode.
             if app.ui.transform.is_none() {
                 crate::transform_tool::begin(app, ctx)?;
             }
+            crate::transform_tool::leave_warp(app);
             if let Some(t) = app.ui.transform.as_mut() {
                 t.mode = crate::state::TransformMode::for_command(id);
             }
@@ -596,10 +598,10 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         | "edit.transform.rotate"
         | "edit.transform.skew"
         | "edit.transform.distort"
-        | "edit.transform.perspective" => match &app.ui.transform {
-            Some(t) => t.warp.is_none(),
-            None => app.session.active().and_then(|s| s.active_layer).is_some(),
-        },
+        | "edit.transform.perspective" => {
+            // An open box (including Warp) can switch mode; otherwise start one on the layer.
+            app.ui.transform.is_some() || app.session.active().and_then(|s| s.active_layer).is_some()
+        }
         // A targeted layer mask enables what edits it (Invert on an adjustment layer's mask).
         i => app.session.is_enabled_with(i, &app.with_mask_target(i, Value::Null)),
     }
