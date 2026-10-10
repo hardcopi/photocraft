@@ -2837,7 +2837,11 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         let resizing = crate::brush_resize::draw(app, &painter, &xf);
         draw_transform_controls(app, &painter, &xf);
         crate::layer_pick_ui::show(app, &ctx);
+        // Menu commands (Zoom In / Fit on Screen / …) write `app.ui.views`. Flush this
+        // frame's pan/zoom first, then take the result, or the local copy overwrites them.
+        app.ui.views[idx] = view.clone();
         crate::canvas_tool_menu::show(app, &ctx);
+        view = app.ui.views[idx].clone();
         crate::snap_ui::draw(app, &painter, &xf);
         // The canvas edge isn't outlined while the pixels past it show (Photoshop's crop preview),
         // nor while the Crop tool hides everything outside its box (Show Cropped Area off).

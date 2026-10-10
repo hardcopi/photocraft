@@ -212,8 +212,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     };
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     // The answers in the platform's words; `dialog_buttons` puts them in its order. Windows (and
-    // Linux) ask Yes / No / Cancel with Y, N and Esc, as Photoshop does there; macOS asks
-    // Don't Save / Cancel / Save. Esc always cancels (the modal closes on it).
+    // Linux) ask Yes / No / Cancel (Y, N and Esc still work); macOS asks Don't Save / Cancel /
+    // Save. Esc always cancels (the modal closes on it).
     let cancel = (ButtonRole::Cancel, "Cancel", mac.then_some(Key::C), 84.0, Answer::Cancel);
     let buttons = if reverts {
         vec![(ButtonRole::Default, "Revert", Some(Key::R), 84.0, Answer::Discard), cancel]
@@ -227,7 +227,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         vec![(ButtonRole::Default, "Yes", Some(Key::Y), 84.0, Answer::Save), (ButtonRole::Alternate, "No", Some(Key::N), 84.0, Answer::Discard), cancel]
     };
     let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
-    let labels: Vec<String> = buttons.iter().map(|b| button_label(mac, b.1, b.2)).collect();
+    let labels: Vec<String> = buttons.iter().map(|b| tl!(b.1).to_string()).collect();
     let row: Vec<DialogButton> = buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3)).collect();
     let modal = egui::Modal::new(egui::Id::new("discard-prompt")).show(ctx, |ui| {
         ui.set_max_width(420.0);
@@ -266,19 +266,7 @@ enum Answer {
     Cancel,
 }
 
-/// macOS keeps the plain button wording even though the keyboard shortcuts still work.
-fn button_label(mac: bool, label: &str, key: Option<Key>) -> String {
-    if mac { tl!(label).to_string() } else { key.map_or_else(|| tl!(label).to_string(), |k| mnemonic(label, k)) }
-}
 
-/// "(S)ave": the key in parentheses, or appended ("Guardar (S)") when the translation doesn't start with it.
-fn mnemonic(label: &str, key: Key) -> String {
-    let (label, k) = (tl!(label), key.name());
-    match label.split_at_checked(1) {
-        Some((first, rest)) if first.eq_ignore_ascii_case(k) => format!("({first}){rest}"),
-        _ => format!("{label} ({k})"),
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -391,13 +379,6 @@ mod tests {
         assert!(app.allow_close);
     }
 
-    #[test]
-    fn mnemonic_labels_bracket_the_key() {
-        assert_eq!(mnemonic("Don't Save", Key::D), "(D)on't Save");
-        assert_eq!(mnemonic("Guardar", Key::S), "Guardar (S)");
-        assert_eq!(mnemonic("保存", Key::S), "保存 (S)");
-    }
-
     type Prompted = egui_kittest::Harness<'static, PhotocraftApp>;
 
     /// The unsaved-changes prompt for `command` over `app`'s dirty documents, as `os` draws it (with
@@ -455,7 +436,7 @@ mod tests {
     fn windows_and_linux_ask_yes_no_cancel_with_the_default_first() {
         for os in [egui::os::OperatingSystem::Windows, egui::os::OperatingSystem::Nix] {
             let mut h = prompt_on(os);
-            let labels = ["(Y)es", "(N)o", "Cancel"];
+            let labels = ["Yes", "No", "Cancel"];
             assert_eq!(drawn_order(&h, labels), labels, "{os:?}");
             tab_walks(&mut h, labels);
             h.key_press(Key::N);
@@ -470,13 +451,6 @@ mod tests {
             assert!(h.state().discard.is_none());
             assert_eq!(h.state().session.documents().len(), 2, "Cancel closed nothing");
         }
-    }
-
-    #[test]
-    fn macos_hides_mnemonics_but_other_platforms_keep_them() {
-        assert_eq!(button_label(true, "Don't Save", Some(Key::D)), tl!("Don't Save"));
-        assert_eq!(button_label(true, "Cancel", Some(Key::C)), tl!("Cancel"));
-        assert_eq!(button_label(false, "Don't Save", Some(Key::D)), "(D)on't Save");
     }
 
     #[test]
@@ -558,10 +532,10 @@ mod tests {
         h.key_press(Key::Y);
         h.run_steps(3);
         assert!(h.state().file_dialog_open());
-        assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits behind the dialog");
+        assert!(h.query_by_label("Yes").is_none(), "the prompt waits behind the dialog");
         answer(&mut h, None);
         assert_eq!(docs_left(&h), Some(1));
-        assert!(h.query_by_label("(Y)es").is_some());
+        assert!(h.query_by_label("Yes").is_some());
         // Saving closes the document.
         h.key_press(Key::Y);
         h.run_steps(3);
@@ -605,7 +579,7 @@ mod tests {
         h.key_press(Key::Y);
         h.run_steps(3);
         assert!(h.state().saving());
-        assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits for the save");
+        assert!(h.query_by_label("Yes").is_none(), "the prompt waits for the save");
         assert_eq!(h.state().session.documents().len(), 1, "still open while saving");
         gate.store(true, Ordering::Relaxed);
         let t = std::time::Instant::now();

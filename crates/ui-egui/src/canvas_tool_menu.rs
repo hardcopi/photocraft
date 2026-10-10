@@ -492,6 +492,7 @@ mod tests {
     use super::*;
     use egui::{Modifiers, PointerButton, Pos2, vec2};
     use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
 
     fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -925,6 +926,25 @@ mod tests {
         assert!(open(&mut app, Tool::Zoom, [10.0, 10.0]));
         choose(&mut app, &Context::default(), "view.actualPixels");
         assert_eq!(app.ui.views[0].zoom, 1.0);
+    }
+
+    #[test]
+    fn zoom_context_menu_zoom_in_survives_the_canvas_frame() {
+        let mut app = app();
+        app.ui.tool = Tool::Zoom;
+        app.ui.views[0].zoom = 1.0;
+        app.ui.views[0].fit_pending = false;
+        let mut h = harness(app);
+        h.state_mut().ui.views[0].zoom = 1.0;
+        h.state_mut().ui.views[0].fit_pending = false;
+        h.run_steps(2);
+        let center = h.state().last_canvas_rect.center();
+        right_click(&mut h, center, Modifiers::NONE);
+        assert!(h.state().ui.canvas_tool_menu.is_some());
+        h.get_by_label("Zoom In").click();
+        h.run_steps(2);
+        assert!(h.state().ui.canvas_tool_menu.is_none());
+        assert!(h.state().ui.views[0].zoom > 1.0, "menu Zoom In was overwritten by the canvas copy: {}", h.state().ui.views[0].zoom);
     }
 
     #[test]
