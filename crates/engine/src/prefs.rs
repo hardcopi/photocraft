@@ -55,10 +55,10 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
 choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
-choice!(Theme { Pro = "pro", ProMedium = "proMedium", Studio = "studio", StudioLight = "studioLight", Classic = "classic" } default ProMedium);
+choice!(Theme { Pro = "pro", ProMedium = "proMedium", SoftDark = "softDark", Studio = "studio", StudioLight = "studioLight", SoftLight = "softLight", Classic = "classic" } default ProMedium);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
-choice!(UiScale { Auto = "auto", P75 = "75", P100 = "100", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
+choice!(UiScale { Auto = "auto", P75 = "75", P100 = "100", P115 = "115", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
 choice!(
     /// Graphics backend of the desktop app's window and GPU canvas (applies at next launch).
     /// `auto` lets PhotoCraft pick (DX12 for Intel adapters on Windows); `cpu` composites on the
@@ -224,6 +224,8 @@ pub struct Interface {
     /// Draw menu item colours set with Edit › Menus.
     pub show_menu_colors: bool,
     pub show_tooltips: bool,
+    /// Draw the theme's dotted pattern on the pasteboard around the document.
+    pub show_canvas_pattern: bool,
     /// Move tool drags show only the layer's outline and an arrow, leaving its pixels in place
     /// until release. Off (the default), the pixels follow the pointer live inside the outline.
     pub show_bounding_box_when_dragging_layer: bool,
@@ -247,6 +249,7 @@ impl Default for Interface {
             dynamic_color_sliders: true,
             show_menu_colors: true,
             show_tooltips: true,
+            show_canvas_pattern: true,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
         }
@@ -351,10 +354,42 @@ pub struct FileHandling {
     pub recent_file_count: u32,
     /// Most recently opened files, newest first (File › Open Recent).
     pub recent_files: Vec<String>,
+    /// Last unique document sizes (File › New › Recent), newest first, capped at 8.
+    #[serde(default)]
+    pub recent_document_sizes: Vec<RecentDocumentSize>,
     /// Directory File › Open last used (and other pick-file dialogs). Empty until a file is chosen.
     pub last_open_dir: String,
     /// Directory File › Save / Save As last used. Empty until a file is chosen.
     pub last_save_dir: String,
+}
+
+/// A document size remembered for File › New › Recent.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct RecentDocumentSize {
+    pub width: u32,
+    pub height: u32,
+    pub dpi: f32,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+}
+
+pub const RECENT_DOCUMENT_CAP: usize = 8;
+
+impl FileHandling {
+    /// Record a created or opened document size (deduped, newest first, cap 8).
+    pub fn push_recent_size(&mut self, width: u32, height: u32, dpi: f32, name: &str) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let dpi = if dpi.is_finite() && dpi > 0.0 { dpi } else { 72.0 };
+        self.recent_document_sizes.retain(|e| !(e.width == width && e.height == height && (e.dpi - dpi).abs() < 0.05));
+        self.recent_document_sizes.insert(
+            0,
+            RecentDocumentSize { width, height, dpi, name: name.trim().to_string() },
+        );
+        self.recent_document_sizes.truncate(RECENT_DOCUMENT_CAP);
+    }
 }
 
 impl Default for FileHandling {
@@ -371,6 +406,7 @@ impl Default for FileHandling {
             maximize_psd_compatibility: Ask::Always,
             recent_file_count: 20,
             recent_files: Vec::new(),
+            recent_document_sizes: Vec::new(),
             last_open_dir: String::new(),
             last_save_dir: String::new(),
         }
@@ -569,6 +605,8 @@ pub struct UnitsAndRulers {
     pub print_resolution: f64,
     pub screen_resolution: f64,
     pub point_size: PointSize,
+    /// View › Rulers starts on for a newly opened or created document.
+    pub show_rulers_in_new_documents: bool,
 }
 
 impl Default for UnitsAndRulers {
@@ -581,6 +619,7 @@ impl Default for UnitsAndRulers {
             print_resolution: 300.0,
             screen_resolution: 72.0,
             point_size: PointSize::PostScript,
+            show_rulers_in_new_documents: true,
         }
     }
 }
@@ -839,7 +878,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.exportClipboard",
     "general.resizeImageDuringPlace",
     "general.alwaysCreateSmartObjectsWhenPlacing",
-    "general.animatedZoom",
     "general.zoomResizesWindows",
     "interface.showChannelsInColor",
     "interface.dynamicColorSliders",
@@ -847,21 +885,17 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "workspace.autoShowHiddenPanels",
     "workspace.openDocumentsAsTabs",
     "workspace.enableFloatingDocumentWindowDocking",
-    "workspace.largeTabs",
     "workspace.enableNarrowOptionsBar",
     "tools.enableFlickPanning",
     "tools.varyRoundBrushHardnessOnHud",
     "tools.showTransformationValues",
     "tools.doubleClickLayerMaskLaunchesSelectAndMask",
     "fileHandling.imagePreviews",
-    "fileHandling.lowercaseExtension",
     "fileHandling.saveInBackground",
     "fileHandling.ignoreExifProfileTag",
     "fileHandling.maximizePsdCompatibility",
     "performance.cacheLevels",
-    "performance.effectCacheMb",
     "performance.legacyCompositing",
-    "scratchDisks.disks",
     "cursors.brushPreviewColor",
     "unitsAndRulers.typeUnits",
     "unitsAndRulers.columnWidth",
@@ -873,13 +907,11 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "type.smartQuotes",
     "type.missingGlyphProtection",
     "type.showFontNamesInEnglish",
-    "type.useEscToCommit",
     "type.textEngine",
     "type.fontPreview",
     "type.fillNewTypeLayersWithPlaceholder",
     "enhancedControls.scrubbySliderAcceleration",
     "enhancedControls.touchGestures",
-    "enhancedControls.zoomWithTrackpadPinch",
     "rawDefaults.colorSpace",
     "rawDefaults.bitDepth",
     "rawDefaults.resolution",
@@ -1277,18 +1309,24 @@ impl Session {
         r
     }
 
+    /// Remember the active document's size for File › New › Recent.
+    pub(crate) fn remember_document_size(&mut self) {
+        let Some(st) = self.active() else { return };
+        let (width, height, dpi, name) = (st.doc.size.width, st.doc.size.height, st.doc.resolution_dpi, st.doc.name.clone());
+        self.prefs.edit(|p| p.file_handling.push_recent_size(width, height, dpi, &name));
+    }
+
     /// Push engine-relevant preferences into live state: every document's history limit and
     /// the layer-effect cache budget.
     pub fn apply_prefs(&mut self) {
         let n = self.prefs().performance.history_states.max(1) as usize;
         let bytes = self.prefs().performance.history_budget_bytes();
-        let budget = self.prefs().performance.effect_cache_mb as usize;
         for st in &mut self.docs {
             st.history.max_states = n;
             st.history.max_bytes = bytes;
             st.history.trim(&st.doc);
         }
-        photocraft_compose::set_effect_cache_budget(budget << 20);
+        crate::scratch::apply_runtime(self.prefs());
         crate::plugin_cmds::sync_prefs(self);
     }
 

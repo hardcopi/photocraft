@@ -353,6 +353,17 @@ fn reveal_in_finder(s: &mut Session, p: &Value) -> Result<Value> {
     reveal(path, p.get("dryRun").and_then(Value::as_bool).unwrap_or(false))
 }
 
+/// Menu label for revealing a file in the platform file manager.
+pub fn reveal_in_file_manager_label() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "Reveal in Finder"
+    } else if cfg!(target_os = "windows") {
+        "Reveal in Explorer"
+    } else {
+        "Reveal in Files"
+    }
+}
+
 /// Show `path` in the platform file manager ([`reveal_command`] + [`spawn`]); `dry_run` answers
 /// the program and arguments instead (tests). Shared by the smart-object command and the document
 /// tab's Reveal in Finder (UI-217-6).
@@ -384,7 +395,7 @@ pub(crate) fn spawn(program: &str, args: &[String]) -> Result<()> {
 
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn spawn(_: &str, _: &[String]) -> Result<()> {
-    Err(other("Reveal in Finder needs the desktop app"))
+    Err(other(format!("{} needs the desktop app", reveal_in_file_manager_label())))
 }
 
 fn native(_: &Session) -> Enabled {
@@ -870,7 +881,7 @@ fn write_file(_: &str, _: &[u8]) -> Result<()> {
 }
 
 macro_rules! spec {
-    ($id:literal, $label:literal, [$($m:literal),*], $params:literal, $en:expr, $run:expr) => {
+    ($id:literal, $label:expr, [$($m:literal),*], $params:literal, $en:expr, $run:expr) => {
         CommandSpec { id: $id, label: $label, menu: &[$($m),*], shortcut: None, params: $params, enabled: $en, run: $run, journal: true }
     };
 }
@@ -906,7 +917,7 @@ pub fn specs() -> Vec<CommandSpec> {
         stack_spec!("none", "None", None),
         spec!(
             "layer.smartObjects.revealInFinder",
-            "Reveal in Finder",
+            reveal_in_file_manager_label(),
             ["Layer", "Smart Objects"],
             r##"{"dryRun":bool=false}"##,
             |s| native(s).and_then(|_| has_linked_smart(s)),

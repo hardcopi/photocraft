@@ -194,6 +194,86 @@ pub fn interact(ui: &mut Ui, resp: &Response, graph: Rect, pts: &mut Vec<[f32; 2
     e
 }
 
+/// Resample a freehand stroke into at most `max_points` curve points (endpoints kept).
+pub fn resample_pencil(samples: &[[f32; 2]], max_points: usize) -> Vec<[f32; 2]> {
+    let mut pts: Vec<[f32; 2]> = samples
+        .iter()
+        .filter(|q| q[0].is_finite() && q[1].is_finite())
+        .map(|q| [q[0].clamp(0.0, 255.0), q[1].clamp(0.0, 255.0)])
+        .collect();
+    if pts.is_empty() {
+        return vec![[0.0, 0.0], [255.0, 255.0]];
+    }
+    pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
+    let mut merged: Vec<[f32; 2]> = Vec::new();
+    for q in pts {
+        match merged.last_mut() {
+            Some(prev) if (q[0] - prev[0]).abs() < MIN_GAP => {
+                prev[1] = (prev[1] + q[1]) * 0.5;
+            }
+            _ => merged.push(q),
+        }
+    }
+    if merged.first().is_none_or(|q| q[0] > 0.0) {
+        let y = merged.first().map(|q| q[1]).unwrap_or(0.0);
+        merged.insert(0, [0.0, y]);
+    }
+    if merged.last().is_none_or(|q| q[0] < 255.0) {
+        let y = merged.last().map(|q| q[1]).unwrap_or(255.0);
+        merged.push([255.0, y]);
+    }
+    let max_points = max_points.max(2);
+    if merged.len() <= max_points {
+        return merged;
+    }
+    let mut lengths = vec![0.0; merged.len()];
+    for i in 1..merged.len() {
+        let dx = merged[i][0] - merged[i - 1][0];
+        let dy = merged[i][1] - merged[i - 1][1];
+        lengths[i] = lengths[i - 1] + (dx * dx + dy * dy).sqrt();
+    }
+    let total = lengths[merged.len() - 1].max(1.0);
+    let mut out = Vec::with_capacity(max_points);
+    let mut j = 0;
+    for k in 0..max_points {
+        let t = total * k as f32 / (max_points - 1) as f32;
+        while j + 1 < lengths.len() && lengths[j + 1] < t {
+            j += 1;
+        }
+        let (a, b) = (merged[j], merged[(j + 1).min(merged.len() - 1)]);
+        let span = (lengths[(j + 1).min(lengths.len() - 1)] - lengths[j]).max(f32::EPSILON);
+        let u = ((t - lengths[j]) / span).clamp(0.0, 1.0);
+        out.push([a[0] + (b[0] - a[0]) * u, a[1] + (b[1] - a[1]) * u]);
+    }
+    if let Some(first) = out.first_mut() {
+        first[0] = 0.0;
+    }
+    if let Some(last) = out.last_mut() {
+        last[0] = 255.0;
+    }
+    out
+}
+
+/// Laplacian smooth of interior points once; endpoints stay put.
+pub fn smooth_curve(pts: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    if pts.len() < 3 {
+        return pts.to_vec();
+    }
+    let mut out = pts.to_vec();
+    for i in 1..pts.len() - 1 {
+        out[i][0] = (pts[i - 1][0] + 2.0 * pts[i][0] + pts[i + 1][0]) * 0.25;
+        out[i][1] = (pts[i - 1][1] + 2.0 * pts[i][1] + pts[i + 1][1]) * 0.25;
+    }
+    for i in 1..out.len() {
+        if out[i][0] <= out[i - 1][0] {
+            out[i][0] = (out[i - 1][0] + 1.0).min(255.0);
+        }
+        out[i][0] = out[i][0].clamp(0.0, 255.0);
+        out[i][1] = out[i][1].clamp(0.0, 255.0);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -256,5 +336,30 @@ mod tests {
         assert!(!delete(&mut p, usize::MAX));
         assert!(!move_to(&mut p, usize::MAX, [128.0, 128.0]));
         assert_eq!(p, line());
+    }
+
+    #[test]
+    fn pencil_resamples_to_the_point_limit() {
+        let samples: Vec<[f32; 2]> = (0..80).map(|i| [i as f32 * 3.0, (i as f32 * 2.0) % 255.0]).collect();
+        let pts = resample_pencil(&samples, MAX_POINTS);
+        assert!(pts.len() <= MAX_POINTS);
+        assert!(pts.len() >= 2);
+        assert_eq!(pts[0][0], 0.0);
+        assert_eq!(pts[pts.len() - 1][0], 255.0);
+        for w in pts.windows(2) {
+            assert!(w[1][0] >= w[0][0]);
+        }
+        assert_eq!(resample_pencil(&[], 16), line());
+    }
+
+    #[test]
+    fn smooth_moves_interior_points_and_keeps_ends() {
+        let src = vec![[0.0, 0.0], [64.0, 200.0], [128.0, 10.0], [255.0, 255.0]];
+        let out = smooth_curve(&src);
+        assert_eq!(out[0], src[0]);
+        assert_eq!(out[3], src[3]);
+        assert_ne!(out[1], src[1]);
+        assert_ne!(out[2], src[2]);
+        assert_eq!(smooth_curve(&line()), line());
     }
 }

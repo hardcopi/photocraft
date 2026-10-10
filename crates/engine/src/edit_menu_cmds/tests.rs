@@ -325,14 +325,20 @@ fn define_custom_shape_and_preset_manager() {
     assert_eq!(custom_shapes(&s).len(), 2);
     assert_eq!(custom_shapes(&s)[1].name, "Shape 2");
     let list = s.execute("edit.presets.presetManager", json!({})).unwrap();
-    assert_eq!(list["customShapes"], json!(["Box", "Shape 2"]));
+    let names = |v: &Value| {
+        v.as_array().unwrap().iter().filter_map(|x| x.get("name").and_then(Value::as_str).map(str::to_string)).collect::<Vec<_>>()
+    };
+    assert_eq!(names(&list["customShapes"]), vec!["Box".to_string(), "Shape 2".to_string()]);
     assert!(list["brushes"].as_array().unwrap().len() > 3);
     s.execute("edit.presets.presetManager", json!({"action": "rename", "kind": "customShapes", "name": "Shape 2", "newName": "Star"})).unwrap();
     s.execute("edit.presets.presetManager", json!({"action": "move", "kind": "customShapes", "index": 1, "to": 0})).unwrap();
     assert_eq!(custom_shapes(&s)[0].name, "Star");
     s.execute("edit.presets.presetManager", json!({"action": "delete", "kind": "customShapes", "name": "Box"})).unwrap();
     assert_eq!(custom_shapes(&s).len(), 1);
-    assert!(s.execute("edit.presets.presetManager", json!({"action": "delete", "kind": "gradients", "index": 0})).is_err());
+    let n_grad = list["gradients"].as_array().unwrap().len();
+    assert!(n_grad > 0);
+    s.execute("edit.presets.presetManager", json!({"action": "delete", "kind": "gradients", "index": 0})).unwrap();
+    assert_eq!(s.presets.gradients.iter().map(|g| g.items.len()).sum::<usize>(), n_grad - 1);
     // The pattern library (Edit › Define Pattern) is managed here too.
     let n = list["patterns"].as_array().unwrap().len();
     assert!(n > 0);
@@ -349,6 +355,70 @@ fn define_custom_shape_and_preset_manager() {
     assert!(t.tools.presets.iter().any(|b| b.name == "Mine"));
     assert_eq!(custom_shapes(&t)[0].path, custom_shapes(&s)[0].path);
     assert!(t.execute("edit.presets.exportImportPresets", json!({"action": "import", "data": {"format": "other"}})).is_err());
+}
+
+#[test]
+fn preset_manager_lists_extra_kinds_and_filters_query() {
+    let mut s = session(8);
+    let list = s.execute("edit.presets.presetManager", json!({"kind": "gradients"})).unwrap();
+    let grads = list["gradients"].as_array().unwrap();
+    assert!(!grads.is_empty());
+    assert!(grads[0].get("name").and_then(Value::as_str).is_some());
+    assert!(grads[0].get("group").and_then(Value::as_str).is_some());
+    let sw = s.execute("edit.presets.presetManager", json!({"kind": "colors"})).unwrap();
+    assert!(sw["swatches"].as_array().unwrap().len() > 1);
+    let styles = s.execute("edit.presets.presetManager", json!({"kind": "styles"})).unwrap();
+    assert!(!styles["styles"].as_array().unwrap().is_empty());
+    let first = grads[0]["name"].as_str().unwrap().to_string();
+    let needle = first.chars().take(3).collect::<String>().to_ascii_lowercase();
+    let filtered = s.execute("edit.presets.presetManager", json!({"kind": "gradients", "query": needle})).unwrap();
+    let names: Vec<&str> = filtered["gradients"].as_array().unwrap().iter().filter_map(|v| v["name"].as_str()).collect();
+    assert!(names.iter().all(|n| n.to_ascii_lowercase().contains(&needle)), "{names:?}");
+    let none = s.execute("edit.presets.presetManager", json!({"kind": "brushes", "query": "zzz-no-such-preset"})).unwrap();
+    assert!(none["brushes"].as_array().unwrap().is_empty());
+    let saved = s.execute("edit.presets.presetManager", json!({"action": "save", "kind": "styles"})).unwrap();
+    assert_eq!(saved["kind"], "styles");
+    assert_eq!(saved["format"], "photocraft-preset-set");
+    assert!(saved["items"].as_array().unwrap().len() == styles["styles"].as_array().unwrap().len());
+}
+
+#[test]
+fn preset_manager_load_merges_a_dumped_set() {
+    let mut s = session(8);
+    s.execute("brush.presets.save", json!({"name": "LoadMe"})).unwrap();
+    let brushes = s.execute("edit.presets.presetManager", json!({"action": "save", "kind": "brushes"})).unwrap();
+    s.edit("path", |doc, _| {
+        doc.work_path = Some(square_path(4.0, 4.0, 10.0));
+        Ok(())
+    })
+    .unwrap();
+    s.execute("edit.defineCustomShape", json!({"name": "LoadShape"})).unwrap();
+    let shapes = s.execute("edit.presets.presetManager", json!({"action": "save", "kind": "customShapes"})).unwrap();
+    let grads = s.execute("edit.presets.presetManager", json!({"action": "save", "kind": "gradients"})).unwrap();
+    let first = grads["items"].as_array().unwrap()[0]["preset"]["name"].as_str().unwrap().to_string();
+    let patterns = s.execute("edit.presets.presetManager", json!({"action": "save", "kind": "patterns"})).unwrap();
+    assert!(patterns.get("pat").and_then(Value::as_str).is_some_and(|p| !p.is_empty()));
+
+    let mut t = Session::new();
+    let n_brushes = t.tools.presets.len();
+    t.execute("edit.presets.presetManager", json!({"action": "load", "kind": "brushes", "data": brushes})).unwrap();
+    assert!(t.tools.presets.iter().any(|b| b.name == "LoadMe"));
+    assert!(t.tools.presets.len() >= n_brushes);
+
+    t.execute("edit.presets.presetManager", json!({"action": "load", "kind": "customShapes", "data": shapes})).unwrap();
+    assert!(custom_shapes(&t).iter().any(|c| c.name == "LoadShape"));
+
+    let n_grad = t.presets.gradients.iter().map(|g| g.items.len()).sum::<usize>();
+    t.execute("edit.presets.presetManager", json!({"action": "load", "kind": "gradients", "data": grads})).unwrap();
+    assert_eq!(t.presets.gradients.iter().map(|g| g.items.len()).sum::<usize>(), n_grad);
+    assert!(t.presets.gradients.iter().any(|g| g.items.iter().any(|i| i.name == first)));
+
+    let n_pat = t.patterns.items.len();
+    t.execute("edit.presets.presetManager", json!({"action": "load", "kind": "patterns", "data": patterns})).unwrap();
+    assert!(t.patterns.items.len() >= n_pat);
+
+    assert!(t.execute("edit.presets.presetManager", json!({"action": "load", "kind": "styles", "data": brushes})).is_err());
+    assert!(s.execute("edit.presets.presetManager", json!({"action": "load", "kind": "styles", "data": {"format": "other", "kind": "styles"}})).is_err());
 }
 
 #[test]

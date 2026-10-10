@@ -1931,6 +1931,8 @@
 	Import Brushes… (.abr)	Importuj pędzle… (.abr)
 	Move Group Down	Przesuń grupę w dół
 	Move Group Up	Przesuń grupę w górę
+	Dock Group	Zadokuj grupę
+	Float Group	Odłącz grupę
 	Reset the brush to the defaults	Przywróć domyślne ustawienia pędzla
 	Restore original size	Przywróć oryginalny rozmiar
 	Roundness:	Zaokrąglenie:
@@ -3304,3 +3306,17 @@ cameraRaw	Roughness	Chropowatość
 	Color to Alpha…	Kolor na alfę…
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
+	Move Up	Przenieś w górę
+	Move Down	Przenieś w dół
+	Save Set…	Zapisz zestaw…
+	Soft Dark Theme	Motyw Soft Dark
+	Soft Light Theme	Motyw Soft Light
+	Soft dark	Miękki ciemny
+	Soft light	Miękki jasny
+	Filter by name	Filtruj według nazwy
+	Pencil: draw the curve freehand	Ołówek: rysuj krzywą odręcznie
+	Smooth the curve	Wygładź krzywą
+	115%	115%
+	Recent document sizes	Ostatnie rozmiary dokumentów
+	Show canvas pattern	Pokaż wzór obszaru roboczego
+	Show rulers in new documents	Pokazuj linijki w nowych dokumentach

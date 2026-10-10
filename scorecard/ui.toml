@@ -29,16 +29,16 @@ note = "file_dialog.rs last_used_dir from recents plus fileHandling.lastOpenDir 
 [[item]]
 id = "UI-217-4"
 target = "Preferences all take effect; recent files persist and honour recent_file_count (#204)"
-status = "missing"
+status = "partial"
 issue = 217
-note = "See the prefs audit and BUG-204-*"
+note = "BUG-204 recent files + recent_file_count done. Wired leftovers: general.animatedZoom, fileHandling.lowercaseExtension, interface.showCanvasPattern, unitsAndRulers.showRulersInNewDocuments, scratchDisks.disks (status bar Scratch Sizes + photocraft-scratch dir), type.useEscToCommit, enhancedControls.zoomWithTrackpadPinch, workspace.largeTabs, performance.effectCacheMb. Remaining HIDDEN_UNTIL_IMPLEMENTED prefs still do nothing"
 
 [[item]]
 id = "UI-217-5"
 target = "Panel groups can float (menu + drag out of the dock) and are restored at launch"
-status = "missing"
+status = "done"
 issue = 217
-note = "No floating groups in dock.rs/panels.rs"
+note = "dock.rs DockLayout.floating + window.floatPanel / window.dockPanel; Float Group in the panel menu; snapshot/restore through prefs.panelLayout; locked workspace refuses float"
 
 [[item]]
 id = "UI-217-6"
@@ -57,58 +57,58 @@ note = "palette.rs: note_recent from menus::invoke keeps the last 8 commands (de
 [[item]]
 id = "UI-217-8"
 target = "Tool-specific canvas right-click menu; right-click spelling suggestions in text fields"
-status = "partial"
+status = "done"
 issue = 217
-note = "paint_mouse.rs brush picker and canvas_tool_menu.rs selection actions; other tools and text spelling menus missing"
+note = "canvas_tool_menu.rs: selection, Pen/shapes, Crop, Hand, Zoom, Type-edit, Free Transform; painting tools keep the brush picker. spelling.rs host dictionary suggestions on type-tool and type-panel fields"
 
 [[item]]
 id = "UI-217-9"
 target = "UI scale presets 100/115/125/150/200 % through zoom_factor, remembered"
-status = "missing"
+status = "done"
 issue = 217
-note = "prefs.rs:61 UiScale unused; input_tests.rs:71 asserts zoom_factor stays 1.0"
+note = "prefs UiScale includes P115; prefs_ui::sync_display_scale applies zoom_factor; Auto follows system DPI (2× on unscaled 4K). Remembered with the rest of Preferences"
 
 [[item]]
 id = "UI-217-10"
 target = "Appearance: animation toggle, canvas pattern toggle per theme, start-screen recents"
-status = "missing"
+status = "done"
 issue = 217
-note = "No such prefs; start screen (canvas.rs:825) has no recents"
+note = "general.animatedZoom gates marching ants; interface.showCanvasPattern paints the pasteboard dots; start screen lists fileHandling.recentFiles (HOME_RECENT)"
 
 [[item]]
 id = "UI-217-11"
 target = "Soft dark and soft light themes with picker previews; outlined knobs in light themes"
-status = "missing"
+status = "done"
 issue = 217
-note = "theme.rs:28 five themes"
+note = "ThemeKind SoftDark/SoftLight (7 total); title-bar picker shows chrome/accent/card swatches; light non-pro knobs get a field_border stroke in widgets.rs"
 
 [[item]]
 id = "UI-217-12"
 target = "Save custom New Document presets; a real Recent category"
-status = "partial"
+status = "done"
 issue = 217
-note = "document_preset_cmds.rs and new_doc_ui.rs: named presets save/select/delete through preferences; Recent remains a static list plus Clipboard"
+note = "Named presets already save through preferences. File › New › Recent is clipboard (if any) plus fileHandling.recentDocumentSizes (cap 8, newest first) recorded on file.new and open"
 
 [[item]]
 id = "UI-217-13"
 target = "Numeric fields accept arithmetic and units; scrubby labels; double-click resets a slider"
-status = "partial"
+status = "done"
 issue = 217
-note = "widgets.rs:132 DragValue scrubs and takes + - * / arithmetic; no units in expressions, label scrub or reset"
+note = "parse_num_in accepts px/in/cm/mm/pt/pica/% with arithmetic; slider_row label scrubs; double-click on slider or label resets when a reset value is set"
 
 [[item]]
 id = "UI-217-14"
 target = "Layers panel: wheel steps blend modes, drop on New/Trash duplicates/deletes, checker behind art"
-status = "missing"
+status = "done"
 issue = 217
-note = "panels.rs:1108 plain dropdown; trash is click-only (panels.rs:1213)"
+note = "combo_box_wheel / step_cyclic on BlendMode::LAYER_MODES; footer drop on New Layer duplicates, on Trash deletes; layer thumbs use checker_with + transparency colors"
 
 [[item]]
 id = "UI-217-15"
 target = "Curves: smoothing / pencil mode, black/grey/white eyedroppers, tooltips"
-status = "partial"
+status = "done"
 issue = 217
-note = "adjust_dialog.rs adds black/gray/white eyedroppers; smoothing and pencil modes remain missing"
+note = "CurvesEditorState.pencil paints a polyline (resampled to ≤16 on release); Smooth is one Laplacian pass; eyedroppers already in adjust_dialog with tooltips"
 
 [[item]]
 id = "UI-217-16"
@@ -120,37 +120,37 @@ note = "saturation_track/lightness_track (adjust_editors.rs): grey -> the hue an
 [[item]]
 id = "UI-217-17"
 target = "Color panel: wheel plus RGB/HSB/CMYK/Lab/Gray/Web slider modes; resizes with its group"
-status = "missing"
+status = "done"
 issue = 217
-note = "panels.rs:1837 single field + hex/RGB readout"
+note = "ColorPanelMode Wheel/RGB/HSB/CMYK/Lab/Gray/Web in ui.ron; HSB keeps the 2D SV field + hue strip; SV/wheel height clamps 120–360 with the group"
 
 [[item]]
 id = "UI-217-18"
 target = "Alt+wheel zooms in gentle ~5 % steps; zoom controls uncramped"
-status = "missing"
+status = "done"
 issue = 217
-note = "canvas.rs:1107-1125 no Alt handling"
+note = "wheel_nav.rs NOTCH = 1.05 (~5% per notch) around the pointer; status-bar zoom field is 80pt wide"
 
 [[item]]
 id = "UI-217-19"
 target = "Shortcut hints rendered per platform; Reveal label per OS"
-status = "missing"
+status = "done"
 issue = 217
-note = "~33 hard-coded modifier glyph strings in ui-egui; menu_catalog.rs:341 one label"
+note = "shortcuts::pretty maps Cmd→Ctrl off-Mac for menus, tips and Keyboard Shortcuts. Reveal in Finder/Explorer/Files via layer_menu_cmds::reveal_in_file_manager_label (menu_catalog uses cfg!)"
 
 [[item]]
 id = "UI-217-20"
 target = "'Show rulers in new documents' preference; guides stored as f64"
-status = "missing"
+status = "done"
 issue = 217
-note = "No rulers pref; doc lib.rs:523 guides are Vec<f32>"
+note = "unitsAndRulers.showRulersInNewDocuments default true; sync_views turns extras.rulers on for new views. Guides.horizontal/vertical are Vec<f64>"
 
 [[item]]
 id = "UI-217-21"
 target = "One Preset Manager for every preset kind with folders, search, reorder, load/save sets"
-status = "partial"
+status = "done"
 issue = 217
-note = "edit_menu_cmds.rs:714 covers brushes, custom shapes, patterns with reorder"
+note = "Six kinds (brushes, customShapes, patterns, gradients, swatches, styles) with group folders, name/group search, Move Up/Down, Save Set dumps photocraft-preset-set JSON (patterns embed .pat), Load merges by name (replace optional) and still imports native .abr/.grd/.aco/.pat"
 
 [[item]]
 id = "UI-217-22"

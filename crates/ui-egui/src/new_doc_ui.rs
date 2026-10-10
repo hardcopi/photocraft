@@ -6,15 +6,34 @@
 use egui::{Align2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
 
+use photocraft_engine::prefs::RecentDocumentSize;
+
 use crate::theme::Tokens;
 use crate::{icons, widgets};
 
 /// A blank-document preset: (name, width px, height px, ppi).
 pub type Preset = (&'static str, u32, u32, f32);
 
+/// An owned card in File › New (Recent sizes are not `'static`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SizePreset {
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+    pub dpi: f32,
+    pub translate: bool,
+}
+
+impl SizePreset {
+    fn from_static(p: Preset) -> Self {
+        Self { name: p.0.into(), width: p.1, height: p.2, dpi: p.3, translate: true }
+    }
+}
+
 /// Photoshop's New Document categories and their blank-document presets.
+/// Recent is filled at runtime from the clipboard plus last-used document sizes.
 pub const CATEGORIES: &[(&str, &[Preset])] = &[
-    ("Recent", &[("Default Photoshop Size", 2100, 1500, 300.0), ("HDTV 1080p", 1920, 1080, 72.0)]),
+    ("Recent", &[]),
     (
         "Photo",
         &[
@@ -165,13 +184,42 @@ pub fn swap_size(f: &mut Map<String, Value>) {
 
 /// Apply a preset to the dialog fields.
 pub fn apply_preset(f: &mut Map<String, Value>, p: &Preset) {
+    apply_size(f, p.0, p.1, p.2, p.3);
+}
+
+fn apply_size_preset(f: &mut Map<String, Value>, p: &SizePreset) {
+    apply_size(f, &p.name, p.width, p.height, p.dpi);
+}
+
+fn apply_size(f: &mut Map<String, Value>, name: &str, width: u32, height: u32, dpi: f32) {
     f.remove("__savedPreset");
-    f.insert("width".into(), json!(p.1));
-    f.insert("height".into(), json!(p.2));
-    f.insert("resolution".into(), json!(p.3));
-    f.insert("__preset".into(), json!(p.0));
+    f.insert("width".into(), json!(width));
+    f.insert("height".into(), json!(height));
+    f.insert("resolution".into(), json!(dpi));
+    f.insert("__preset".into(), json!(name));
     // Print and photo presets are specified in inches, screen presets in pixels.
-    f.insert("__unit".into(), json!(if p.3 >= 300.0 { "in" } else { "px" }));
+    f.insert("__unit".into(), json!(if dpi >= 300.0 { "in" } else { "px" }));
+}
+
+/// Clipboard (if offered) plus last unique document sizes, newest first.
+pub fn recent_size_presets(clipboard: Option<Preset>, recents: &[RecentDocumentSize]) -> Vec<SizePreset> {
+    let mut out = Vec::new();
+    if let Some(p) = clipboard {
+        out.push(SizePreset::from_static(p));
+    }
+    for e in recents {
+        if e.width == 0 || e.height == 0 {
+            continue;
+        }
+        if clipboard.is_some_and(|c| c.1 == e.width && c.2 == e.height && (c.3 - e.dpi).abs() < 0.05) {
+            continue;
+        }
+        if out.iter().any(|p| p.width == e.width && p.height == e.height && (p.dpi - e.dpi).abs() < 0.05) {
+            continue;
+        }
+        out.push(SizePreset { name: format!("{}×{}", e.width, e.height), width: e.width, height: e.height, dpi: e.dpi, translate: false });
+    }
+    out
 }
 
 /// Fields `file.new` takes (drops the dialog's `__` UI keys).
@@ -347,9 +395,11 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     ui.add_space(6.0);
     widgets::hairline(ui);
     ui.add_space(8.0);
-    let presets = CATEGORIES.iter().find(|c| c.0 == cat).map_or(CATEGORIES[0].1, |c| c.1);
-    // The clipboard image's size comes first among the Recent presets.
-    let presets: Vec<Preset> = clipboard_preset(f).filter(|_| cat == CATEGORIES[0].0).into_iter().chain(presets.iter().copied()).collect();
+    let presets: Vec<SizePreset> = if cat == CATEGORIES[0].0 {
+        recent_size_presets(clipboard_preset(f), &app.session.prefs().file_handling.recent_document_sizes)
+    } else {
+        CATEGORIES.iter().find(|c| c.0 == cat).map(|c| c.1.iter().copied().map(SizePreset::from_static).collect()).unwrap_or_default()
+    };
     let chosen = get_s(f, "__preset", "");
     ui.horizontal_top(|ui| {
         // Left: preset grid.
@@ -367,7 +417,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                     ui.spacing_mut().item_spacing.x = 8.0;
                     for p in row {
                         let (r, resp) = ui.allocate_exact_size(card, Sense::click());
-                        let on = chosen == p.0;
+                        let on = chosen == p.name;
                         ui.painter().rect_filled(
                             r,
                             t.radius,
@@ -382,25 +432,26 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                         if on {
                             ui.painter().rect_stroke(r, t.radius, Stroke::new(1.5, t.accent), StrokeKind::Inside);
                         }
-                        page_icon(ui, Rect::from_center_size(pos2(r.center().x, r.top() + 34.0), vec2(40.0, 40.0)), p.1, p.2, &t);
-                        let title = card_title(ui.painter(), tl!(p.0), card.x - 12.0, t.text);
+                        page_icon(ui, Rect::from_center_size(pos2(r.center().x, r.top() + 34.0), vec2(40.0, 40.0)), p.width, p.height, &t);
+                        let title_text = if p.translate { tl!(&p.name) } else { p.name.as_str() };
+                        let title = card_title(ui.painter(), title_text, card.x - 12.0, t.text);
                         let elided = title.elided;
                         ui.painter().galley(pos2(r.center().x, r.top() + 70.0 - title.size().y / 2.0), title, t.text);
-                        let unit = if p.3 >= 300.0 { "in" } else { "px" };
+                        let unit = if p.dpi >= 300.0 { "in" } else { "px" };
                         let size = if unit == "in" {
                             format!(
                                 "{} x {} in @ {} ppi",
-                                widgets::fmt_num(to_unit(p.1 as f32, "in", p.3) as f64),
-                                widgets::fmt_num(to_unit(p.2 as f32, "in", p.3) as f64),
-                                p.3
+                                widgets::fmt_num(to_unit(p.width as f32, "in", p.dpi) as f64),
+                                widgets::fmt_num(to_unit(p.height as f32, "in", p.dpi) as f64),
+                                p.dpi
                             )
                         } else {
-                            format!("{} x {} px @ {} ppi", p.1, p.2, p.3)
+                            format!("{} x {} px @ {} ppi", p.width, p.height, p.dpi)
                         };
                         ui.painter().text(pos2(r.center().x, r.top() + 97.0), Align2::CENTER_CENTER, size, egui::FontId::proportional(10.5), t.text_faint);
-                        let resp = if elided { resp.on_hover_text(tl!(p.0)) } else { resp };
+                        let resp = if elided { resp.on_hover_text(title_text) } else { resp };
                         if resp.clicked() {
-                            apply_preset(f, p);
+                            apply_size_preset(f, p);
                         }
                     }
                 });
@@ -595,6 +646,20 @@ mod tests {
                 assert_ne!(crate::i18n::tr(lang, tooltip), *tooltip, "{}: {tooltip}", lang.code());
             }
         }
+    }
+
+    #[test]
+    fn recent_size_presets_dedup_clipboard_and_cap_newest() {
+        let clip = Some((CLIPBOARD, 100, 50, 72.0));
+        let recents = vec![
+            RecentDocumentSize { width: 100, height: 50, dpi: 72.0, name: "clip".into() },
+            RecentDocumentSize { width: 800, height: 600, dpi: 72.0, name: "web".into() },
+            RecentDocumentSize { width: 0, height: 10, dpi: 72.0, name: String::new() },
+        ];
+        let cards = recent_size_presets(clip, &recents);
+        assert_eq!(cards[0].name, CLIPBOARD);
+        assert_eq!(cards.iter().filter(|p| p.width == 100 && p.height == 50).count(), 1);
+        assert!(cards.iter().any(|p| p.name == "800×600"));
     }
 
     #[test]
@@ -874,16 +939,32 @@ mod tests {
             let mut f = fields(&h);
             super::super::set_clipboard(&mut f, 640, 360);
             set_fields(&mut h, f);
-            // Recent lists the Clipboard card first: three presets instead of two.
-            assert!(h.query_by_label_contains("BLANK DOCUMENT PRESETS (3)").is_some());
+            // Recent lists the Clipboard card first (and only, with no remembered sizes).
+            assert!(h.query_by_label_contains("BLANK DOCUMENT PRESETS (1)").is_some());
             let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
-            // Pick the second card, then the first (Clipboard) again.
-            click_at(&mut h, heading.left_bottom() + egui::vec2(80.0 + 172.0, 60.0));
-            assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some("Default Photoshop Size"));
             click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
             assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some(super::super::CLIPBOARD));
             enter(&mut h);
             assert_eq!(created(&h), (640, 360, 72.0));
+        }
+
+        #[test]
+        fn recent_contains_the_last_created_document_size() {
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.state_mut().session.execute("file.new", serde_json::json!({"width": 800, "height": 600, "resolution": 72.0})).unwrap();
+            let recents = h.state().session.prefs().file_handling.recent_document_sizes.clone();
+            assert!(recents.iter().any(|e| e.width == 800 && e.height == 600));
+            let cards = super::super::recent_size_presets(None, &recents);
+            assert!(cards.iter().any(|p| p.name == "800×600" && p.width == 800 && p.height == 600));
+            h.state_mut().ui.open_dialog(DialogKind::NewDocument, UiState::new_document_fields());
+            h.run_steps(3);
+            assert!(h.query_by_label_contains("800×600").is_some() || {
+                let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
+                click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
+                fields(&h).get("__preset").and_then(|v| v.as_str()) == Some("800×600")
+            });
         }
 
         #[test]

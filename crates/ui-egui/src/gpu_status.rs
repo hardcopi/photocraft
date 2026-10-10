@@ -179,18 +179,22 @@ mod tests {
             ..Default::default()
         };
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        let ctx = egui::Context::default();
+        // First idle tick may persist default tool options; recovery should not add a second write.
+        crate::prefs_ui::tick(&mut app, &ctx);
+        let before = saves.get();
         queue_fallback_notice(&mut app, "device unavailable");
         choose_recovery(&mut app, false).unwrap();
         assert!(!app.session.prefs().performance.use_gpu);
         assert_eq!(app.session.prefs().get("performance.renderingMode"), Some(json!("cpu")));
         assert!(app.ui.gpu_fallback_notice.is_none());
-        crate::prefs_ui::tick(&mut app, &egui::Context::default());
-        assert_eq!(saves.get(), 1, "recovery choice writes once");
+        crate::prefs_ui::tick(&mut app, &ctx);
+        assert_eq!(saves.get(), before + 1, "recovery choice writes once");
         choose_recovery(&mut app, true).unwrap();
         assert!(app.session.prefs().performance.use_gpu);
         assert_eq!(app.session.prefs().get("performance.renderingMode"), Some(json!("gpu")));
         assert!(app.gpu.is_none());
-        crate::prefs_ui::tick(&mut app, &egui::Context::default());
-        assert_eq!(saves.get(), 2, "retry choice writes once");
+        crate::prefs_ui::tick(&mut app, &ctx);
+        assert_eq!(saves.get(), before + 2, "retry choice writes once");
     }
 }

@@ -1898,6 +1898,8 @@
 	Import Brushes… (.abr)	Impor Kuas… (.abr)
 	Move Group Down	Pindah Grup ke Bawah
 	Move Group Up	Pindah Grup ke Atas
+	Dock Group	Dok Grup
+	Float Group	Buat Grup Mengambang
 	Reset the brush to the defaults	Reset kuas ke default
 	Restore original size	Pulihkan ukuran asli
 	Roundness:	Kebulatan:
@@ -2689,3 +2691,17 @@ fontWeight	Italic	Miring
 	Color to Alpha…	Warna ke Alpha…
 	Transparency Threshold	Ambang transparansi
 	Opacity Threshold	Ambang opasitas
+	Move Up	Pindah ke atas
+	Move Down	Pindah ke bawah
+	Save Set…	Simpan set…
+	Soft Dark Theme	Tema Soft Dark
+	Soft Light Theme	Tema Soft Light
+	Soft dark	Gelap lembut
+	Soft light	Terang lembut
+	Filter by name	Filter menurut nama
+	Pencil: draw the curve freehand	Pensil: gambar kurva bebas
+	Smooth the curve	Haluskan kurva
+	115%	115%
+	Recent document sizes	Ukuran dokumen terbaru
+	Show canvas pattern	Tampilkan pola kanvas
+	Show rulers in new documents	Tampilkan penggaris di dokumen baru

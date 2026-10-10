@@ -4,7 +4,9 @@
 //! it. The last expanded group (Layers by default) fills what the others leave. Drag the gap
 //! between two groups to resize them, double-click a tab (or use the panel menu) to collapse a
 //! group to its tab strip, and drag a tab strip to move the group up or down the column
-//! (unless Window › Workspace › Lock Workspace is on).
+//! (unless Window › Workspace › Lock Workspace is on). Drag a tab strip out of the column (or
+//! choose Float Group) to float it as a window; drag the window title back onto the dock to
+//! dock it again. Lock Workspace blocks float, dock and reorder.
 //!
 //! The layout is [`DockLayout`] in `UiState::dock` (serialisable, drivable with `ui.set`), saved
 //! with Window › Workspace › New Workspace…, reset by Reset Workspace, and remembered across
@@ -154,6 +156,39 @@ impl Group {
     }
 }
 
+/// Gap between groups; it is also the splitter's grab area.
+pub const GAP: f32 = 6.0;
+/// Upper bound on a stored height (guards against absurd values from `ui.set`).
+const MAX_HEIGHT: f32 = 4000.0;
+/// How far left of the dock a tab-strip drop must be before the group floats (points).
+const FLOAT_OUT: f32 = 24.0;
+
+/// A group drawn as a floating window instead of in the dock column (UI-217-5).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct FloatingGroup {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+impl Default for FloatingGroup {
+    fn default() -> Self {
+        Self { x: 80.0, y: 80.0, w: 280.0, h: 240.0 }
+    }
+}
+
+impl FloatingGroup {
+    fn sanitized(self, g: Group) -> Self {
+        let x = if self.x.is_finite() { self.x } else { 80.0 };
+        let y = if self.y.is_finite() { self.y } else { 80.0 };
+        let w = if self.w.is_finite() { self.w.clamp(180.0, MAX_HEIGHT) } else { 280.0 };
+        let h = if self.h.is_finite() { self.h.clamp(g.min_height(), MAX_HEIGHT) } else { g.default_height() };
+        Self { x, y, w, h }
+    }
+}
+
 /// Order, heights and collapsed state of the dock groups.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -165,12 +200,9 @@ pub struct DockLayout {
     pub heights: BTreeMap<Group, f32>,
     /// Groups collapsed to their tab strip.
     pub collapsed: Vec<Group>,
+    /// Groups taken out of the dock column, keyed by group, with their window rect.
+    pub floating: BTreeMap<Group, FloatingGroup>,
 }
-
-/// Gap between groups; it is also the splitter's grab area.
-pub const GAP: f32 = 6.0;
-/// Upper bound on a stored height (guards against absurd values from `ui.set`).
-const MAX_HEIGHT: f32 = 4000.0;
 
 impl DockLayout {
     /// Every group once, in display order.
@@ -225,6 +257,31 @@ impl DockLayout {
         let at = before.and_then(|b| order.iter().position(|x| *x == b)).unwrap_or(order.len());
         order.insert(at, g);
         self.order = order;
+    }
+
+    pub fn is_floating(&self, g: Group) -> bool {
+        self.floating.contains_key(&g)
+    }
+
+    /// Shown groups that stay in the dock column, in display order.
+    pub fn docked(&self, shown: &[Group]) -> Vec<Group> {
+        self.order().into_iter().filter(|g| shown.contains(g) && !self.is_floating(*g)).collect()
+    }
+
+    /// Take `g` out of the dock column and show it as a window at `at`.
+    pub fn float_group(&mut self, g: Group, at: FloatingGroup) {
+        self.floating.insert(g, at.sanitized(g));
+    }
+
+    /// Put `g` back in the column just before `before` (or last when `None`).
+    pub fn dock_group(&mut self, g: Group, before: Option<Group>) {
+        self.floating.remove(&g);
+        self.move_group(g, before);
+    }
+
+    /// Put `g` back in the column at the place it already has in display order.
+    pub fn dock_in_place(&mut self, g: Group) {
+        self.floating.remove(&g);
     }
 
     /// Lay out the `shown` groups (in display order) in a column `avail` points tall with
@@ -321,6 +378,9 @@ enum Action {
     ToggleCollapse(Group),
     Close(Group),
     Move(Group, Option<Group>),
+    Float(Group, FloatingGroup),
+    Dock(Group, Option<Group>),
+    DockInPlace(Group),
 }
 
 /// Rects of the groups drawn last frame (screen points), for tests and automation.
@@ -353,12 +413,21 @@ fn strips_id() -> egui::Id {
     egui::Id::new("dock-strip-rects")
 }
 
+fn column_id() -> egui::Id {
+    egui::Id::new("dock-column-rect")
+}
+
+fn last_column(ctx: &egui::Context) -> Option<Rect> {
+    ctx.data(|d| d.get_temp::<Rect>(column_id()))
+}
+
 /// Draw the `shown` groups (any order; the layout decides) filling `ui`. `body` draws one
-/// group's tab content.
+/// group's tab content. Groups in [`DockLayout::floating`] are skipped here and drawn by
+/// [`show_floating`].
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut body: impl FnMut(&mut PhotocraftApp, &mut egui::Ui, Group, usize)) {
     let t = Tokens::get(ui.ctx());
     let strip = if t.pro { 28.0 } else { 40.0 };
-    let order: Vec<Group> = app.ui.dock.order().into_iter().filter(|g| shown.contains(g)).collect();
+    let order = app.ui.dock.docked(shown);
     let area = ui.available_rect_before_wrap();
     let heights = app.ui.dock.heights_for(&order, area.height(), strip);
     let locked = app.session.prefs().workspace_locked;
@@ -375,17 +444,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         let mut sel = before;
         let tabs = g.tabs(t.pro);
         let resp = widgets::card_ex(&mut child, g.key(), tabs, &mut sel, collapsed, |ui, tab| {
-            let inner = ui.available_height().max(0.0);
-            if g.scrolls_itself(tab) {
-                ui.set_min_height(inner);
-                body(app, ui, g, tab);
-            } else {
-                egui::ScrollArea::vertical()
-                    .id_salt(("dock-scroll", g.key(), tab))
-                    .max_height(inner)
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| body(app, ui, g, tab));
-            }
+            draw_tab_body(app, ui, g, tab, &mut body);
         });
         strips.push(StripRects { group: g, tabs: resp.tabs.clone(), menu: resp.menu.rect, chevron: resp.chevron });
         // The body may switch tabs itself (Adjustments jumps back to Properties).
@@ -402,40 +461,16 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             && resp.strip.drag_stopped()
             && let Some(p) = ui.ctx().pointer_interact_pos()
         {
-            actions.push(Action::Move(g, drop_before(&order, &rects, g, p.y)));
+            if should_float(p, area) {
+                actions.push(Action::Float(g, default_float(g, &app.ui.dock, Some(area), Some(p))));
+            } else {
+                actions.push(Action::Move(g, drop_before(&order, &rects, g, p.y)));
+            }
         }
         if dragging == Some(g) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
-        egui::Popup::menu(&resp.menu).show(|ui| {
-            ui.set_min_width(170.0);
-            if tabs.get(sel) == Some(&"Layers") {
-                crate::layer_row_ui::panel_menu(app, ui);
-                ui.separator();
-            }
-            if tabs.get(sel) == Some(&"Swatches") {
-                crate::swatches_ui::panel_menu(app, ui);
-                ui.separator();
-            }
-            if ui.button(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") }).clicked() {
-                actions.push(Action::ToggleCollapse(g));
-                ui.close();
-            }
-            let pos = order.iter().position(|x| *x == g).unwrap_or(0);
-            if ui.add_enabled(!locked && pos > 0, egui::Button::new(tl!("Move Group Up"))).clicked() {
-                actions.push(Action::Move(g, order.get(pos.saturating_sub(1)).copied()));
-                ui.close();
-            }
-            if ui.add_enabled(!locked && pos + 1 < order.len(), egui::Button::new(tl!("Move Group Down"))).clicked() {
-                actions.push(Action::Move(g, order.get(pos + 2).copied()));
-                ui.close();
-            }
-            ui.separator();
-            if ui.button(tl!("Close Tab Group")).clicked() {
-                actions.push(Action::Close(g));
-                ui.close();
-            }
-        });
+        group_menu(app, &resp.menu, g, tabs, sel, collapsed, locked, false, &order, &mut actions);
         // Splitter in the gap below this group: resizes it against the next expanded group.
         if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {
             let gap = Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(rect.width(), GAP)).expand2(vec2(0.0, 2.0));
@@ -449,8 +484,10 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
             }
         }
     }
-    // Drop indicator while a group is dragged by its tab strip.
-    if let (Some(g), Some(p)) = (dragging, ui.ctx().pointer_interact_pos()) {
+    // Drop indicator while a group is dragged by its tab strip (stays in the column).
+    if let (Some(g), Some(p)) = (dragging, ui.ctx().pointer_interact_pos())
+        && !should_float(p, area)
+    {
         let before = drop_before(&order, &rects, g, p.y);
         let line_y = match before.and_then(|b| rects.iter().find(|(x, _)| *x == b)) {
             Some((_, r)) => r.top() - GAP / 2.0,
@@ -461,8 +498,152 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
     ui.ctx().data_mut(|d| {
         d.insert_temp(rects_id(), rects);
         d.insert_temp(strips_id(), strips);
+        d.insert_temp(column_id(), area);
     });
     ui.advance_cursor_after_rect(area);
+    apply_actions(app, actions);
+}
+
+/// Draw groups in [`DockLayout::floating`] as egui windows. `shown` is the same list as [`show`].
+pub fn show_floating(app: &mut PhotocraftApp, ctx: &egui::Context, shown: &[Group], mut body: impl FnMut(&mut PhotocraftApp, &mut egui::Ui, Group, usize)) {
+    let t = Tokens::get(ctx);
+    let locked = app.session.prefs().workspace_locked;
+    let floating: Vec<Group> = app.ui.dock.order().into_iter().filter(|g| shown.contains(g) && app.ui.dock.is_floating(*g)).collect();
+    if floating.is_empty() {
+        return;
+    }
+    let column = last_column(ctx);
+    let docked_rects = last_rects(ctx);
+    let docked_order: Vec<Group> = docked_rects.iter().map(|(g, _)| *g).collect();
+    let mut actions: Vec<Action> = Vec::new();
+    let mut strips = last_strips(ctx);
+    let mut rects = docked_rects.clone();
+    for g in floating {
+        let collapsed = app.ui.dock.is_collapsed(g);
+        let fg = app.ui.dock.floating.get(&g).copied().unwrap_or_default().sanitized(g);
+        let tabs = g.tabs(t.pro);
+        let title = tabs.first().copied().unwrap_or("Panel");
+        let before = *g.tab_mut(&mut app.ui.dock_tabs);
+        let mut sel = before;
+        let mut menu: Option<egui::Response> = None;
+        let inner = egui::Window::new(tl!(title))
+            .id(egui::Id::new(("dock-float", g.key())))
+            .resizable(!locked)
+            .movable(!locked)
+            .collapsible(true)
+            .default_open(!collapsed)
+            .pivot(egui::Align2::LEFT_TOP)
+            .current_pos(pos2(fg.x, fg.y))
+            .default_size(vec2(fg.w, fg.h))
+            .min_size(vec2(180.0, g.min_height()))
+            .show(ctx, |ui| {
+                ui.set_min_size(vec2((fg.w - 8.0).max(160.0), (fg.h - 28.0).max(40.0)));
+                let resp = widgets::card_ex(ui, g.key(), tabs, &mut sel, collapsed, |ui, tab| {
+                    draw_tab_body(app, ui, g, tab, &mut body);
+                });
+                strips.push(StripRects { group: g, tabs: resp.tabs.clone(), menu: resp.menu.rect, chevron: resp.chevron });
+                if resp.strip.double_clicked() || resp.tab_double_clicked || (collapsed && resp.tab_clicked) {
+                    actions.push(Action::ToggleCollapse(g));
+                }
+                menu = Some(resp.menu);
+            });
+        if sel != before {
+            *g.tab_mut(&mut app.ui.dock_tabs) = sel.min(tabs.len().saturating_sub(1));
+        }
+        if let Some(menu) = menu.as_ref() {
+            group_menu(app, menu, g, tabs, sel, collapsed, locked, true, &docked_order, &mut actions);
+        }
+        if let Some(inner) = inner {
+            let r = inner.response.rect;
+            rects.push((g, r));
+            if r.width().is_finite() && r.height().is_finite() && app.ui.dock.is_floating(g) {
+                app.ui.dock.floating.insert(g, FloatingGroup { x: r.left(), y: r.top(), w: r.width(), h: r.height() }.sanitized(g));
+            }
+            if !locked
+                && inner.response.drag_stopped()
+                && let Some(p) = ctx.pointer_interact_pos()
+                && column.is_some_and(|c| c.contains(p))
+            {
+                actions.push(Action::Dock(g, drop_before(&docked_order, &docked_rects, g, p.y)));
+            }
+        }
+    }
+    ctx.data_mut(|d| {
+        d.insert_temp(rects_id(), rects);
+        d.insert_temp(strips_id(), strips);
+    });
+    apply_actions(app, actions);
+}
+
+fn draw_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, g: Group, tab: usize, body: &mut impl FnMut(&mut PhotocraftApp, &mut egui::Ui, Group, usize)) {
+    let inner = ui.available_height().max(0.0);
+    if g.scrolls_itself(tab) {
+        ui.set_min_height(inner);
+        body(app, ui, g, tab);
+    } else {
+        egui::ScrollArea::vertical()
+            .id_salt(("dock-scroll", g.key(), tab))
+            .max_height(inner)
+            .auto_shrink([false, false])
+            .show(ui, |ui| body(app, ui, g, tab));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn group_menu(
+    app: &mut PhotocraftApp,
+    menu: &egui::Response,
+    g: Group,
+    tabs: &[&str],
+    sel: usize,
+    collapsed: bool,
+    locked: bool,
+    floating: bool,
+    order: &[Group],
+    actions: &mut Vec<Action>,
+) {
+    egui::Popup::menu(menu).show(|ui| {
+        ui.set_min_width(170.0);
+        if tabs.get(sel) == Some(&"Layers") {
+            crate::layer_row_ui::panel_menu(app, ui);
+            ui.separator();
+        }
+        if tabs.get(sel) == Some(&"Swatches") {
+            crate::swatches_ui::panel_menu(app, ui);
+            ui.separator();
+        }
+        if ui.button(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") }).clicked() {
+            actions.push(Action::ToggleCollapse(g));
+            ui.close();
+        }
+        let pos = order.iter().position(|x| *x == g).unwrap_or(0);
+        if ui.add_enabled(!locked && !floating && pos > 0, egui::Button::new(tl!("Move Group Up"))).clicked() {
+            actions.push(Action::Move(g, order.get(pos.saturating_sub(1)).copied()));
+            ui.close();
+        }
+        if ui.add_enabled(!locked && !floating && pos + 1 < order.len(), egui::Button::new(tl!("Move Group Down"))).clicked() {
+            actions.push(Action::Move(g, order.get(pos + 2).copied()));
+            ui.close();
+        }
+        if floating {
+            if ui.add_enabled(!locked, egui::Button::new(tl!("Dock Group"))).clicked() {
+                actions.push(Action::DockInPlace(g));
+                ui.close();
+            }
+        } else if ui.add_enabled(!locked, egui::Button::new(tl!("Float Group"))).clicked() {
+            let at = default_float(g, &app.ui.dock, last_column(ui.ctx()), ui.ctx().pointer_interact_pos());
+            actions.push(Action::Float(g, at));
+            ui.close();
+        }
+        ui.separator();
+        if ui.button(tl!("Close Tab Group")).clicked() {
+            actions.push(Action::Close(g));
+            ui.close();
+        }
+    });
+}
+
+fn apply_actions(app: &mut PhotocraftApp, actions: Vec<Action>) {
     for a in actions {
         match a {
             Action::ToggleCollapse(g) => {
@@ -475,8 +656,65 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
                     app.ui.dock.move_group(g, before);
                 }
             }
+            Action::Float(g, at) => app.ui.dock.float_group(g, at),
+            Action::Dock(g, before) => app.ui.dock.dock_group(g, before),
+            Action::DockInPlace(g) => app.ui.dock.dock_in_place(g),
         }
     }
+}
+
+fn should_float(p: egui::Pos2, column: Rect) -> bool {
+    p.x < column.left() - FLOAT_OUT || !column.contains(p)
+}
+
+fn default_float(g: Group, layout: &DockLayout, column: Option<Rect>, at: Option<egui::Pos2>) -> FloatingGroup {
+    let w = column.map(|c| c.width()).filter(|w| w.is_finite() && *w >= 180.0).unwrap_or(280.0);
+    let h = layout.height(g);
+    let (x, y) = match (at, column) {
+        (Some(p), _) => (p.x, p.y),
+        (None, Some(c)) => ((c.left() - w - 16.0).max(8.0), c.top() + 24.0),
+        (None, None) => (80.0, 80.0),
+    };
+    FloatingGroup { x, y, w, h }.sanitized(g)
+}
+
+fn parse_group(params: &Value) -> Result<Group, String> {
+    params
+        .get("group")
+        .and_then(Value::as_str)
+        .and_then(Group::from_key)
+        .ok_or_else(|| "pass `group` (color, properties, character, navigator, history, layers)".into())
+}
+
+fn floating_from_params(params: &Value, g: Group, layout: &DockLayout) -> FloatingGroup {
+    let base = default_float(g, layout, None, None);
+    let num = |k, fallback| params.get(k).and_then(Value::as_f64).map(|n| n as f32).filter(|n| n.is_finite()).unwrap_or(fallback);
+    FloatingGroup { x: num("x", base.x), y: num("y", base.y), w: num("w", base.w), h: num("h", base.h) }.sanitized(g)
+}
+
+/// `window.floatPanel` `{group}` (optional `x`,`y`,`w`,`h`).
+pub fn float_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
+    if app.session.prefs().workspace_locked {
+        return Err("workspace is locked".into());
+    }
+    let g = parse_group(params)?;
+    let at = floating_from_params(params, g, &app.ui.dock);
+    app.ui.dock.float_group(g, at);
+    Ok(json!({"group": g.key(), "floating": true, "x": at.x, "y": at.y, "w": at.w, "h": at.h}))
+}
+
+/// `window.dockPanel` `{group}`; omit `before` to restore its place, `before: null` to put it last.
+pub fn dock_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
+    if app.session.prefs().workspace_locked {
+        return Err("workspace is locked".into());
+    }
+    let g = parse_group(params)?;
+    match params.get("before") {
+        None => app.ui.dock.dock_in_place(g),
+        Some(Value::Null) => app.ui.dock.dock_group(g, None),
+        Some(v) => app.ui.dock.dock_group(g, v.as_str().and_then(Group::from_key)),
+    }
+    Ok(json!({"group": g.key(), "floating": false}))
 }
 
 fn rects_after_layout(heights: &[(Group, f32)], area: Rect) -> Vec<(Group, Rect)> {

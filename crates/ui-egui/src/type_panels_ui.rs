@@ -360,6 +360,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!("Name")).color(t.text_dim).size(11.5));
         let r = ui.add_enabled(id != 0, egui::TextEdit::singleline(&mut name).desired_width(170.0));
+        crate::spelling::text_field_menu(&r, &mut name);
         if r.lost_focus() && name.trim() != s["name"].as_str().unwrap_or("") && !name.trim().is_empty() {
             let _ = run(app, &format!("{prefix}.rename"), json!({ "id": id, "name": name.trim() }));
             ui.data_mut(|d| d.remove::<String>(key));
@@ -501,6 +502,7 @@ fn family_picker(ui: &mut egui::Ui, salt: &str, current: &mut String) -> bool {
     egui::ComboBox::from_id_salt(salt).selected_text(shown.clone()).width(140.0).height(360.0).icon(crate::widgets::chevron_icon).show_ui(ui, |ui| {
         let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
         let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(180.0));
+        crate::spelling::text_field_menu(&r, &mut q);
         if !r.has_focus() && q.is_empty() {
             r.request_focus();
         }
@@ -769,7 +771,8 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     ui.add_enabled(false, egui::TextEdit::singleline(&mut shown.clone()).desired_width(240.0));
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("Change To:")).color(t.text_dim).size(11.5));
-                    ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0));
+                    let change = ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0));
+                    crate::spelling::text_field_menu(&change, &mut change_to);
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("Suggestions:")).color(t.text_dim).size(11.5));
                     egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(3)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {

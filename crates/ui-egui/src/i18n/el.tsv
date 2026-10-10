@@ -1467,6 +1467,8 @@
 	Expand Panel Group	Ανάπτυξη ομάδας πλαισίων
 	Move Group Down	Μετακίνηση ομάδας προς τα κάτω
 	Move Group Up	Μετακίνηση ομάδας προς τα επάνω
+	Dock Group	Προσάρτηση ομάδας
+	Float Group	Αποδέσμευση ομάδας
 	Reset the brush to the defaults	Επαναφορά προεπιλεγμένων ρυθμίσεων πινέλου
 	Restore original size	Επαναφορά αρχικού μεγέθους
 	Search Brushes	Αναζήτηση πινέλων
@@ -3391,3 +3393,17 @@ fontWeight	Thin	Πολύ λεπτά
 	Color to Alpha…	Χρώμα σε άλφα…
 	Transparency Threshold	Κατώφλι διαφάνειας
 	Opacity Threshold	Κατώφλι αδιαφάνειας
+	Move Up	Μετακίνηση επάνω
+	Move Down	Μετακίνηση κάτω
+	Save Set…	Αποθήκευση συνόλου…
+	Soft Dark Theme	Θέμα Soft Dark
+	Soft Light Theme	Θέμα Soft Light
+	Soft dark	Απαλό σκούρο
+	Soft light	Απαλό ανοιχτό
+	Filter by name	Φιλτράρισμα κατά όνομα
+	Pencil: draw the curve freehand	Μολύβι: σχεδίαση καμπύλης ελεύθερα
+	Smooth the curve	Εξομάλυνση καμπύλης
+	115%	115%
+	Recent document sizes	Πρόσφατα μεγέθη εγγράφων
+	Show canvas pattern	Εμφάνιση μοτίβου καμβά
+	Show rulers in new documents	Εμφάνιση χαράκων σε νέα έγγραφα

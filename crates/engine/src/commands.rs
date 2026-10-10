@@ -377,6 +377,7 @@ fn build() -> Vec<CommandSpec> {
                 };
                 doc.resolution_dpi = res;
                 let i = s.add_document(doc, None);
+                s.remember_document_size();
                 Ok(json!({ "document": i }))
             }
         ),

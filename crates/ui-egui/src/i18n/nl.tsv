@@ -77,6 +77,8 @@
 	Import	Importeren
 	Browse…	Bladeren…
 	Reveal in Finder	Weergeven in Finder
+	Reveal in Explorer	Weergeven in Verkenner
+	Reveal in Files	Weergeven in Bestanden
 	File Info…	Bestandsinformatie…
 	Print…	Afdrukken…
 	Print One Copy	Eén exemplaar afdrukken
@@ -1913,6 +1915,8 @@
 	Import Brushes… (.abr)	Penselen importeren… (.abr)
 	Move Group Down	Groep omlaag
 	Move Group Up	Groep omhoog
+	Dock Group	Groep vastzetten
+	Float Group	Groep losmaken
 	Reset the brush to the defaults	Het penseel terugzetten naar de standaardwaarden
 	Restore original size	Oorspronkelijke grootte herstellen
 	Roundness:	Rondheid:
@@ -3464,3 +3468,17 @@ cameraRaw	Whites	Witten
 	Dual Axis	Dubbele as
 	Diagonal	Diagonaal
 	Transform Symmetry	Symmetrie transformeren
+	Move Up	Omhoog
+	Move Down	Omlaag
+	Save Set…	Set opslaan…
+	Soft Dark Theme	Soft Dark-thema
+	Soft Light Theme	Soft Light-thema
+	Soft dark	Zacht donker
+	Soft light	Zacht licht
+	Filter by name	Filteren op naam
+	Pencil: draw the curve freehand	Potlood: teken de curve uit de vrije hand
+	Smooth the curve	Curve gladstrijken
+	115%	115%
+	Recent document sizes	Recente documentformaten
+	Show canvas pattern	Canvaspatroon tonen
+	Show rulers in new documents	Linialen tonen in nieuwe documenten

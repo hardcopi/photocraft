@@ -1,6 +1,6 @@
 //! Dock layout tests (#88): fixed group heights, splitters, collapse, reorder, persistence.
 
-use egui::{Modifiers, PointerButton, Pos2, Rect, vec2};
+use egui::{vec2, Modifiers, PointerButton, Pos2, Rect};
 use egui_kittest::Harness;
 use serde_json::json;
 
@@ -397,7 +397,7 @@ fn clicking_around_the_ui_keeps_the_panels_put() {
 }
 
 fn is_pro(theme: ThemeKind) -> bool {
-    matches!(theme, ThemeKind::Pro | ThemeKind::ProMedium)
+    theme.is_pro()
 }
 
 /// Full app at `size` (1× scale) on a document with `n` layers named "Row 00", "Row 01", …
@@ -642,4 +642,62 @@ fn tab_hides_all_panels_and_shift_tab_only_the_dock() {
     let mut v = serde_json::to_value(crate::state::Panels::default()).unwrap();
     v.as_object_mut().unwrap().remove("dock");
     assert!(serde_json::from_value::<crate::state::Panels>(v).unwrap().dock);
+}
+
+#[test]
+fn float_then_dock_restores_order() {
+    let mut l = DockLayout::default();
+    let before = l.order();
+    l.float_group(Group::Color, FloatingGroup { x: 40.0, y: 80.0, w: 280.0, h: 190.0 });
+    assert!(l.is_floating(Group::Color));
+    assert_eq!(l.docked(&ESSENTIALS), vec![Group::Properties, Group::Layers]);
+    let hs = l.heights_for(&l.docked(&ESSENTIALS), 1200.0, 28.0);
+    assert_eq!(hs[0].0, Group::Properties);
+    assert_eq!(hs.last().map(|g| g.0), Some(Group::Layers));
+    l.dock_in_place(Group::Color);
+    assert!(!l.is_floating(Group::Color));
+    assert_eq!(l.order(), before);
+    l.float_group(Group::Properties, FloatingGroup::default());
+    l.dock_group(Group::Properties, Some(Group::Layers));
+    assert_eq!(l.order().iter().position(|g| *g == Group::Properties), l.order().iter().position(|g| *g == Group::Layers).map(|i| i.saturating_sub(1)));
+}
+
+#[test]
+fn snapshot_json_contains_floating_rect() {
+    let (mut app, _, _) = app_with_layers();
+    app.ui.dock.float_group(Group::Color, FloatingGroup { x: 40.0, y: 60.0, w: 300.0, h: 200.0 });
+    let ctx = egui::Context::default();
+    let v = snapshot(&app, &ctx);
+    assert_eq!(v["dock"]["floating"]["color"], json!({"x": 40.0, "y": 60.0, "w": 300.0, "h": 200.0}));
+    let back: DockLayout = serde_json::from_value(v["dock"].clone()).unwrap();
+    assert_eq!(back.floating.get(&Group::Color).copied(), Some(FloatingGroup { x: 40.0, y: 60.0, w: 300.0, h: 200.0 }));
+    // Old layouts without `floating` still load.
+    let old: DockLayout = serde_json::from_value(json!({"order": ["layers"], "heights": {}, "collapsed": []})).unwrap();
+    assert!(old.floating.is_empty());
+    persist(&mut app, &ctx);
+    let saved = app.session.prefs().panel_layout.clone();
+    let mut s2 = photocraft_engine::Session::new();
+    s2.load_prefs_json(&app.session.prefs_to_json()).unwrap();
+    let mut app2 = PhotocraftApp::new(s2, crate::Services::default());
+    restore(&mut app2);
+    assert_eq!(app2.ui.dock.floating.get(&Group::Color).copied(), Some(FloatingGroup { x: 40.0, y: 60.0, w: 300.0, h: 200.0 }));
+    let _ = saved;
+}
+
+#[test]
+fn locked_workspace_refuses_float() {
+    let (mut app, _, _) = app_with_layers();
+    let ctx = egui::Context::default();
+    app.session.prefs.edit(|p| p.workspace_locked = true);
+    let err = crate::menus::invoke(&mut app, &ctx, "window.floatPanel", json!({"group": "color"})).unwrap_err();
+    assert!(err.contains("locked"), "{err}");
+    assert!(app.ui.dock.floating.is_empty());
+    assert!(!crate::menus::is_enabled(&app, "window.floatPanel"));
+    assert!(!crate::menus::is_enabled(&app, "window.dockPanel"));
+    app.session.prefs.edit(|p| p.workspace_locked = false);
+    crate::menus::invoke(&mut app, &ctx, "window.floatPanel", json!({"group": "color", "x": 12.0, "y": 24.0, "w": 280.0, "h": 190.0})).unwrap();
+    assert!(app.ui.dock.is_floating(Group::Color));
+    crate::menus::invoke(&mut app, &ctx, "window.dockPanel", json!({"group": "color"})).unwrap();
+    assert!(!app.ui.dock.is_floating(Group::Color));
+    assert_eq!(app.ui.dock.order().first(), Some(&Group::Color));
 }

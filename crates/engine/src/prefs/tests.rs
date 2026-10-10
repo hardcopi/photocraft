@@ -3,7 +3,22 @@ use super::*;
 fn session() -> Session {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+    s.prefs.edit(|p| p.file_handling.recent_document_sizes.clear());
     s
+}
+
+#[test]
+fn file_new_records_recent_document_size() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 800, "height": 600, "resolution": 72})).unwrap();
+    let rec = &s.prefs().file_handling.recent_document_sizes;
+    assert_eq!(rec.len(), 1);
+    assert_eq!((rec[0].width, rec[0].height), (800, 600));
+    s.execute("file.new", json!({"width": 1920, "height": 1080, "resolution": 72})).unwrap();
+    s.execute("file.new", json!({"width": 800, "height": 600, "resolution": 72})).unwrap();
+    let rec = &s.prefs().file_handling.recent_document_sizes;
+    assert_eq!(rec[0].width, 800);
+    assert_eq!(rec.len(), 2);
 }
 
 #[test]

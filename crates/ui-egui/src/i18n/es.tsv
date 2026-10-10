@@ -1935,6 +1935,8 @@
 	Import Brushes… (.abr)	Importar pinceles… (.abr)
 	Move Group Down	Mover grupo abajo
 	Move Group Up	Mover grupo arriba
+	Dock Group	Acoplar grupo
+	Float Group	Flotar grupo
 	Reset the brush to the defaults	Restablecer el pincel a los valores predeterminados
 	Restore original size	Restaurar el tamaño original
 	Roundness:	Redondez:
@@ -2349,3 +2351,17 @@ fontWeight	Italic	Cursiva
 	Color to Alpha…	Color a alfa…
 	Transparency Threshold	Umbral de transparencia
 	Opacity Threshold	Umbral de opacidad
+	Move Up	Mover arriba
+	Move Down	Mover abajo
+	Save Set…	Guardar conjunto…
+	Soft Dark Theme	Tema Soft Dark
+	Soft Light Theme	Tema Soft Light
+	Soft dark	Oscuro suave
+	Soft light	Claro suave
+	Filter by name	Filtrar por nombre
+	Pencil: draw the curve freehand	Lápiz: dibujar la curva a mano alzada
+	Smooth the curve	Suavizar la curva
+	115%	115%
+	Recent document sizes	Tamaños de documento recientes
+	Show canvas pattern	Mostrar patrón del lienzo
+	Show rulers in new documents	Mostrar reglas en documentos nuevos

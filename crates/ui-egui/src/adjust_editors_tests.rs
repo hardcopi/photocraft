@@ -286,7 +286,7 @@ fn color_balance_of(a: &Adjustment) -> ([f32; 3], [f32; 3], [f32; 3], bool) {
 
 /// Photoshop 25.4, Color Balance in the Properties panel (measured on the real application by
 /// scripted clicks and reading the layer back): a double-click on a slider's knob or track sets that
-/// slider of the shown tone to 0, whatever modifier is held; the label doesn't; a click jumps; the
+/// slider of the shown tone to 0, whatever modifier is held; the label does too; a click jumps; the
 /// wheel does nothing; Up/Down in a field step 1, with Shift 10.
 #[test]
 fn color_balance_sliders_reset_and_step_like_photoshop() {
@@ -316,12 +316,14 @@ fn color_balance_sliders_reset_and_step_like_photoshop() {
         clicks_with(&mut h, on_track, 2, mods);
         assert_eq!(cb(&h), ([10.0, 0.0, 0.0], [0.0, -30.0, 20.0], [0.0, 0.0, -15.0], false), "{mods:?} double-click");
     }
-    // The label is not a reset target.
+    // A double-click on the scrubby label also resets (UI-217-13).
     h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
     h.run_steps(3);
     clicks_with(&mut h, label.center(), 2, egui::Modifiers::NONE);
-    assert_eq!(cb(&h).1, [40.0, -30.0, 20.0], "double-click on the label");
+    assert_eq!(cb(&h).1, [0.0, -30.0, 20.0], "double-click on the label");
     // The panel's sliders ignore the wheel.
+    h.state_mut().run("layer.setAdjustment", start.clone()).unwrap();
+    h.run_steps(3);
     wheel_at(&mut h, on_track, 3.0, egui::Modifiers::NONE);
     wheel_at(&mut h, on_track, 3.0, egui::Modifiers::SHIFT);
     assert_eq!(cb(&h).1, [40.0, -30.0, 20.0], "wheel over a Properties slider");

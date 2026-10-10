@@ -1951,6 +1951,8 @@
 	Import Brushes… (.abr)	Importovat štětce… (.abr)
 	Move Group Down	Posunout skupinu dolů
 	Move Group Up	Posunout skupinu nahoru
+	Dock Group	Připojit skupinu
+	Float Group	Oddokovat skupinu
 	Reset the brush to the defaults	Obnovit výchozí nastavení štětce
 	Restore original size	Obnovit původní velikost
 	Roundness:	Kulatost:
@@ -2281,3 +2283,17 @@ fontWeight	Italic	Kurzíva
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
+	Move Up	Posunout nahoru
+	Move Down	Posunout dolů
+	Save Set…	Uložit sadu…
+	Soft Dark Theme	Téma Soft Dark
+	Soft Light Theme	Téma Soft Light
+	Soft dark	Měkká tmavá
+	Soft light	Měkká světlá
+	Filter by name	Filtrovat podle názvu
+	Pencil: draw the curve freehand	Tužka: kreslit křivku od ruky
+	Smooth the curve	Vyhladit křivku
+	115%	115%
+	Recent document sizes	Nedávné velikosti dokumentů
+	Show canvas pattern	Zobrazit vzor plátna
+	Show rulers in new documents	Zobrazit pravítka v nových dokumentech

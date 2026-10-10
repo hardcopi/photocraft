@@ -1,7 +1,8 @@
-//! Canvas context menus for the selection tools, the Pen and an active Free Transform box.
+//! Canvas context menus for selection, Pen, Crop, Type, Hand, Zoom, shape and retouch tools,
+//! plus an active Free Transform box.
 
 use egui::Context;
-use photocraft_doc::LayerContent;
+use photocraft_doc::{LayerContent, LayerId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
@@ -19,6 +20,21 @@ pub struct CanvasToolMenu {
     /// Opened over a Free Transform box: its modes instead of the tool's actions.
     #[serde(default)]
     pub transform: bool,
+    /// Type tool while an inline edit session is open.
+    #[serde(default)]
+    pub text_edit: bool,
+    /// Spelling suggestions for the word under the type caret (not command ids).
+    #[serde(default)]
+    pub spelling: Vec<String>,
+    /// Character range of that word in the type layer.
+    #[serde(default)]
+    pub word: Option<(usize, usize)>,
+}
+
+impl CanvasToolMenu {
+    fn at(pos: [f32; 2], tool: Tool) -> Self {
+        Self { pos, tool, has_selection: false, has_path: false, path_name: None, transform: false, text_edit: false, spelling: Vec::new(), word: None }
+    }
 }
 
 /// One menu row: label and command id. `None` is a separator.
@@ -108,12 +124,45 @@ pub const PEN_MENU: &[Row] = &[
     Some(("Disable Symmetry Path", "paint.symmetryDisable")),
 ];
 
-/// Tools whose plain canvas right-click offers selection actions.
-pub fn applies(tool: Tool) -> bool {
+/// Crop tool: Crop / Cancel / Front Image / Reset only where those command ids exist.
+pub const CROP_MENU: &[Row] = &[Some(("Crop", "image.crop"))];
+
+/// Hand tool view actions (Fill Screen has no command id).
+pub const HAND_MENU: &[Row] = &[Some(("Fit on Screen", "view.fitOnScreen")), Some(("Actual Pixels", "view.actualPixels"))];
+
+/// Zoom tool view actions.
+pub const ZOOM_MENU: &[Row] = &[
+    Some(("Zoom In", "view.zoomIn")),
+    Some(("Zoom Out", "view.zoomOut")),
+    Some(("Fit on Screen", "view.fitOnScreen")),
+    Some(("Actual Pixels", "view.actualPixels")),
+];
+
+/// Type tool while editing: pixel-selection commands are intercepted as type edits.
+pub const TYPE_EDIT_MENU: &[Row] = &[Some(("Cut", "edit.cut")), Some(("Copy", "edit.copy")), Some(("Paste", "edit.paste")), Some(("Select All", "select.all"))];
+
+fn is_selection_tool(tool: Tool) -> bool {
     matches!(
         tool,
-        Tool::RectMarquee | Tool::EllipseMarquee | Tool::Lasso | Tool::PolygonLasso | Tool::MagneticLasso | Tool::MagicWand | Tool::ObjectSelection | Tool::Pen
+        Tool::RectMarquee
+            | Tool::EllipseMarquee
+            | Tool::Lasso
+            | Tool::PolygonLasso
+            | Tool::MagneticLasso
+            | Tool::MagicWand
+            | Tool::ObjectSelection
+            | Tool::Patch
+            | Tool::ContentAwareMove
     )
+}
+
+fn is_pen_menu_tool(tool: Tool) -> bool {
+    tool == Tool::Pen || crate::vector_ui::is_shape_tool(tool)
+}
+
+/// Tools whose plain canvas right-click opens this menu (not the Brush picker or layer list).
+pub fn applies(tool: Tool) -> bool {
+    is_selection_tool(tool) || is_pen_menu_tool(tool) || tool == Tool::Crop || tool.is_type() || matches!(tool, Tool::Hand | Tool::Zoom)
 }
 
 /// The selection tools' rows, with or without an active selection.
@@ -125,11 +174,23 @@ pub fn selection_rows(has_selection: bool) -> &'static [Row] {
 pub fn rows(menu: &CanvasToolMenu) -> &'static [Row] {
     if menu.transform {
         TRANSFORM_MENU
-    } else if menu.tool == Tool::Pen {
-        PEN_MENU
+    } else if is_pen_menu_tool(menu.tool) {
+        if crate::vector_ui::is_shape_tool(menu.tool) && !menu.has_path { &[] } else { PEN_MENU }
+    } else if menu.tool == Tool::Crop {
+        CROP_MENU
+    } else if menu.tool.is_type() {
+        if menu.text_edit { TYPE_EDIT_MENU } else { &[] }
+    } else if menu.tool == Tool::Hand {
+        HAND_MENU
+    } else if menu.tool == Tool::Zoom {
+        ZOOM_MENU
     } else {
         selection_rows(menu.has_selection)
     }
+}
+
+fn has_items(menu: &CanvasToolMenu) -> bool {
+    !menu.spelling.is_empty() || rows(menu).iter().any(Option::is_some)
 }
 
 /// Is `command` one of the open menu's rows, and enabled?
@@ -152,12 +213,18 @@ pub fn open_transform(app: &mut PhotocraftApp, pos: [f32; 2]) -> bool {
     }
     app.ui.brush_picker = None;
     app.ui.layer_menu = None;
-    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool: app.ui.tool, has_selection: false, has_path: false, path_name: None, transform: true });
+    app.ui.canvas_tool_menu = Some(CanvasToolMenu { transform: true, ..CanvasToolMenu::at(pos, app.ui.tool) });
     true
 }
 
 pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) -> bool {
-    if menu.transform || menu.tool != Tool::Pen {
+    if menu.transform {
+        return crate::menus::is_enabled(app, command);
+    }
+    if menu.tool.is_type() && menu.text_edit {
+        return type_entry_enabled(app, command);
+    }
+    if !is_pen_menu_tool(menu.tool) {
         return crate::menus::is_enabled(app, command);
     }
     let Some(st) = app.session.active() else { return false };
@@ -195,6 +262,23 @@ pub fn entry_enabled(app: &PhotocraftApp, menu: &CanvasToolMenu, command: &str) 
     }
 }
 
+fn type_entry_enabled(app: &PhotocraftApp, command: &str) -> bool {
+    let Some(ed) = app.ui.text_edit.as_ref() else { return false };
+    match command {
+        "edit.cut" | "edit.copy" => ed.caret != ed.anchor,
+        "edit.paste" | "select.all" => true,
+        _ => false,
+    }
+}
+
+fn type_spelling(app: &PhotocraftApp) -> (Vec<String>, Option<(usize, usize)>) {
+    let Some(ed) = app.ui.text_edit.as_ref() else { return (Vec::new(), None) };
+    let Some(text) = crate::type_tool::current_text(app, LayerId(ed.layer)) else { return (Vec::new(), None) };
+    let Some((a, b, word)) = crate::spelling::word_at(&text, ed.caret) else { return (Vec::new(), None) };
+    let spelling = crate::spelling::suggestions(&word);
+    (spelling, Some((a, b)))
+}
+
 pub fn open(app: &mut PhotocraftApp, tool: Tool, pos: [f32; 2]) -> bool {
     if !applies(tool) || !pos.iter().all(|v| v.is_finite()) {
         return false;
@@ -204,7 +288,13 @@ pub fn open(app: &mut PhotocraftApp, tool: Tool, pos: [f32; 2]) -> bool {
     let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
     let has_path = crate::vector_ui::active_path_name(app).is_some() || app.ui.pen.as_ref().is_some_and(|p| p.knots.len() >= 2);
     let path_name = crate::vector_ui::active_path_name(app);
-    app.ui.canvas_tool_menu = Some(CanvasToolMenu { pos, tool, has_selection, has_path, path_name, transform: false });
+    let text_edit = tool.is_type() && app.ui.text_edit.is_some();
+    let (spelling, word) = if text_edit { type_spelling(app) } else { (Vec::new(), None) };
+    let menu = CanvasToolMenu { has_selection, has_path, path_name, text_edit, spelling, word, ..CanvasToolMenu::at(pos, tool) };
+    if !has_items(&menu) {
+        return false;
+    }
+    app.ui.canvas_tool_menu = Some(menu);
     true
 }
 
@@ -213,8 +303,13 @@ pub fn choose(app: &mut PhotocraftApp, ctx: &Context, command: &str) {
     if !available(app, &menu, command) {
         return;
     }
-    let result = if menu.tool == Tool::Pen && !menu.transform {
+    let result = if is_pen_menu_tool(menu.tool) && !menu.transform {
         choose_pen(app, ctx, &menu, command)
+    } else if menu.tool.is_type() && menu.text_edit {
+        choose_type(app, ctx, command)
+    } else if command == "image.crop" && menu.tool == Tool::Crop {
+        crate::canvas::commit_crop(app);
+        Ok(())
     } else if command == "select.toWorkPath" {
         // Photoshop's Make Work Path… asks for the tolerance first.
         spec_dialog(app, command, "Make Work Path", r##"{"tolerance":0.5..10=2}"##, serde_json::Map::new());
@@ -295,6 +390,45 @@ fn choose_pen(app: &mut PhotocraftApp, ctx: &Context, menu: &CanvasToolMenu, com
     Ok(())
 }
 
+fn choose_type(app: &mut PhotocraftApp, ctx: &Context, command: &str) -> Result<(), String> {
+    let Some(ed) = app.ui.text_edit.clone() else { return Err("no type edit session".into()) };
+    let text = crate::type_tool::current_text(app, LayerId(ed.layer)).unwrap_or_default();
+    let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
+    match command {
+        "edit.cut" | "edit.copy" => {
+            if a < b {
+                ctx.copy_text(text.chars().skip(a).take(b - a).collect::<String>());
+                if command == "edit.cut" {
+                    crate::type_tool::insert(app, "");
+                }
+            }
+            Ok(())
+        }
+        "edit.paste" => {
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            Ok(())
+        }
+        "select.all" => {
+            let n = text.chars().count();
+            if let Some(e) = app.ui.text_edit.as_mut() {
+                e.anchor = 0;
+                e.caret = n;
+            }
+            Ok(())
+        }
+        _ => Err(format!("{command} is not a type edit action")),
+    }
+}
+
+fn apply_spelling(app: &mut PhotocraftApp, menu: &CanvasToolMenu, suggestion: &str) {
+    let Some((start, end)) = menu.word else { return };
+    if let Some(e) = app.ui.text_edit.as_mut() {
+        e.anchor = start;
+        e.caret = end;
+    }
+    crate::type_tool::insert(app, suggestion);
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let Some(menu) = app.ui.canvas_tool_menu.clone() else { return };
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) || app.ui.tool != menu.tool || (menu.transform && app.ui.transform.is_none()) {
@@ -306,6 +440,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(210.0, 140.0), |r| r.size());
     let pos = egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top()));
     let mut selected = None;
+    let mut spelling = None;
     let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
             let t = crate::theme::Tokens::get(ui.ctx());
@@ -320,6 +455,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_width(200.0);
             crate::widgets::menu_scroll(ui, |ui| {
+                for s in &menu.spelling {
+                    let item = egui::Button::new(s.as_str()).min_size(egui::vec2(200.0, 20.0));
+                    if ui.add(item).clicked() {
+                        spelling = Some(s.clone());
+                    }
+                }
+                if !menu.spelling.is_empty() && rows(&menu).iter().any(Option::is_some) {
+                    ui.separator();
+                }
                 for row in rows(&menu) {
                     let Some((label, command)) = *row else {
                         ui.separator();
@@ -333,7 +477,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             });
         });
     });
-    if let Some(command) = selected {
+    if let Some(suggestion) = spelling {
+        app.ui.canvas_tool_menu = None;
+        apply_spelling(app, &menu, &suggestion);
+    } else if let Some(command) = selected {
         choose(app, ctx, command);
     } else if ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !area.response.rect.contains(p))) {
         app.ui.canvas_tool_menu = None;
@@ -455,8 +602,13 @@ mod tests {
         // Every row runs a real command: one the menu bar has, or an engine command.
         let app = app();
         let items = crate::menus::menu_items(&app);
-        for (label, id) in [SELECTION_MENU, NO_SELECTION_MENU, PEN_MENU, TRANSFORM_MENU].into_iter().flatten().flatten() {
-            assert!(items.iter().any(|i| i.id == *id) || photocraft_engine::commands::find(id).is_some(), "{label}: unknown command {id}");
+        for (label, id) in
+            [SELECTION_MENU, NO_SELECTION_MENU, PEN_MENU, TRANSFORM_MENU, CROP_MENU, HAND_MENU, ZOOM_MENU, TYPE_EDIT_MENU].into_iter().flatten().flatten()
+        {
+            assert!(
+                items.iter().any(|i| i.id == *id) || photocraft_engine::commands::find(id).is_some() || crate::menus::is_live(id),
+                "{label}: unknown command {id}"
+            );
         }
     }
 
@@ -717,5 +869,109 @@ mod tests {
             assert!(!entry_enabled(&app, menu, id), "{id} must not act on the layer replaced by the pending shape");
         }
         assert!(entry_enabled(&app, menu, "path.toSelection"));
+    }
+
+    fn ids(rows: &[Row]) -> Vec<&str> {
+        rows.iter().flatten().map(|(_, id)| *id).collect()
+    }
+
+    #[test]
+    fn crop_hand_zoom_type_menus_list_live_command_ids() {
+        let mut app = app();
+        app.ui.tool = Tool::Crop;
+        assert!(open(&mut app, Tool::Crop, [10.0, 10.0]));
+        assert_eq!(ids(rows(app.ui.canvas_tool_menu.as_ref().unwrap())), ["image.crop"]);
+        assert!(photocraft_engine::commands::find("image.crop").is_some());
+
+        app.ui.tool = Tool::Hand;
+        assert!(open(&mut app, Tool::Hand, [10.0, 10.0]));
+        assert_eq!(ids(rows(app.ui.canvas_tool_menu.as_ref().unwrap())), ["view.fitOnScreen", "view.actualPixels"]);
+
+        app.ui.tool = Tool::Zoom;
+        assert!(open(&mut app, Tool::Zoom, [10.0, 10.0]));
+        assert_eq!(ids(rows(app.ui.canvas_tool_menu.as_ref().unwrap())), ["view.zoomIn", "view.zoomOut", "view.fitOnScreen", "view.actualPixels"]);
+
+        let layer = app.run("type.create", json!({"text": "teh word", "x": 4, "y": 4})).unwrap()["layer"].as_u64().unwrap();
+        app.ui.tool = Tool::Type;
+        app.ui.text_edit =
+            Some(crate::state::TextEdit { layer, caret: 1, anchor: 1, session: "t".into(), created: false, dragging: false, resize: None, preedit: None });
+        assert!(open(&mut app, Tool::Type, [10.0, 10.0]));
+        assert_eq!(ids(rows(app.ui.canvas_tool_menu.as_ref().unwrap())), ["edit.cut", "edit.copy", "edit.paste", "select.all"]);
+        for id in ids(rows(app.ui.canvas_tool_menu.as_ref().unwrap())) {
+            assert!(photocraft_engine::commands::find(id).is_some() || crate::menus::is_live(id), "{id} is not a live command");
+        }
+        for (_, id) in [CROP_MENU, HAND_MENU, ZOOM_MENU, TYPE_EDIT_MENU].into_iter().flatten().flatten() {
+            assert!(photocraft_engine::commands::find(id).is_some() || crate::menus::is_live(id), "unknown {id}");
+        }
+    }
+
+    #[test]
+    fn crop_menu_commits_the_frame_and_hand_zoom_run_view_commands() {
+        let mut app = app();
+        app.ui.tool = Tool::Crop;
+        app.ui.crop_rect = Some([2.0, 2.0, 20.0, 20.0]);
+        app.crop.default_frame = false;
+        assert!(open(&mut app, Tool::Crop, [10.0, 10.0]));
+        choose(&mut app, &Context::default(), "image.crop");
+        assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("image.crop"));
+        assert!(app.ui.crop_rect.is_none());
+
+        app.ui.tool = Tool::Hand;
+        assert!(open(&mut app, Tool::Hand, [10.0, 10.0]));
+        choose(&mut app, &Context::default(), "view.fitOnScreen");
+        assert!(app.ui.views[0].fit_pending);
+
+        app.ui.tool = Tool::Zoom;
+        assert!(open(&mut app, Tool::Zoom, [10.0, 10.0]));
+        choose(&mut app, &Context::default(), "view.actualPixels");
+        assert_eq!(app.ui.views[0].zoom, 1.0);
+    }
+
+    #[test]
+    fn type_menu_edits_text_and_applies_spelling_through_type_edit() {
+        let mut app = app();
+        let layer = app.run("type.create", json!({"text": "teh word", "x": 4, "y": 4})).unwrap()["layer"].as_u64().unwrap();
+        app.ui.tool = Tool::Type;
+        app.ui.text_edit =
+            Some(crate::state::TextEdit { layer, caret: 3, anchor: 0, session: "t".into(), created: false, dragging: false, resize: None, preedit: None });
+        assert!(open(&mut app, Tool::Type, [10.0, 10.0]));
+        let menu = app.ui.canvas_tool_menu.as_ref().unwrap();
+        assert!(entry_enabled(&app, menu, "edit.cut"));
+        assert!(entry_enabled(&app, menu, "edit.copy"));
+        choose(&mut app, &Context::default(), "edit.cut");
+        let text = crate::type_tool::current_text(&app, photocraft_doc::LayerId(layer)).unwrap();
+        assert_eq!(text, " word");
+        assert!(app.session.journal.iter().any(|(id, _)| id == "type.edit"));
+
+        app.ui.text_edit =
+            Some(crate::state::TextEdit { layer, caret: 0, anchor: 0, session: "t".into(), created: false, dragging: false, resize: None, preedit: None });
+        assert!(open(&mut app, Tool::Type, [10.0, 10.0]));
+        if let Some(menu) = app.ui.canvas_tool_menu.as_mut() {
+            menu.spelling = vec!["the".into()];
+            menu.word = Some((0, 0));
+        }
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        apply_spelling(&mut app, &menu, "the");
+        let text = crate::type_tool::current_text(&app, photocraft_doc::LayerId(layer)).unwrap();
+        assert!(text.starts_with("the"), "{text}");
+    }
+
+    #[test]
+    fn type_without_edit_and_eyedropper_do_not_open_and_shape_uses_pen_when_a_path_exists() {
+        let mut app = app();
+        app.ui.tool = Tool::Type;
+        assert!(!open(&mut app, Tool::Type, [10.0, 10.0]));
+        assert!(!open(&mut app, Tool::Eyedropper, [10.0, 10.0]));
+        assert!(!open(&mut app, Tool::Healing, [10.0, 10.0]));
+        assert!(!open(&mut app, Tool::CloneStamp, [10.0, 10.0]));
+        app.ui.tool = Tool::Rectangle;
+        assert!(!open(&mut app, Tool::Rectangle, [10.0, 10.0]), "New Shape needs geometry");
+        app.run("shape.create", json!({"kind": "rect", "rect": [2, 2, 10, 10], "fill": "#ff0000"})).unwrap();
+        app.ui.tool = Tool::Rectangle;
+        assert!(open(&mut app, Tool::Rectangle, [10.0, 10.0]));
+        assert_eq!(rows(app.ui.canvas_tool_menu.as_ref().unwrap()), PEN_MENU);
+        app.ui.tool = Tool::Patch;
+        assert!(open(&mut app, Tool::Patch, [10.0, 10.0]));
+        assert_eq!(rows(app.ui.canvas_tool_menu.as_ref().unwrap()), NO_SELECTION_MENU);
     }
 }

@@ -289,12 +289,12 @@ fn session_key(app: &mut PhotocraftApp) -> String {
     format!("type-{}", app.ui.alloc_id())
 }
 
-fn current_text(app: &PhotocraftApp, id: LayerId) -> Option<String> {
+pub(crate) fn current_text(app: &PhotocraftApp, id: LayerId) -> Option<String> {
     Some(text_layer(&app.session.active()?.doc, id)?.text.clone())
 }
 
 /// Replace the selection with `s`.
-fn insert(app: &mut PhotocraftApp, s: &str) {
+pub(crate) fn insert(app: &mut PhotocraftApp, s: &str) {
     let Some(ed) = app.ui.text_edit.clone() else { return };
     let (a, b) = (ed.caret.min(ed.anchor), ed.caret.max(ed.anchor));
     let s = s.replace("\r\n", "\n").replace('\r', "\n");
@@ -526,7 +526,8 @@ pub fn handle_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
                     Key::Enter if m.command => commit(app),
                     Key::Enter => insert(app, "\n"),
                     Key::Escape if crate::type_transform::active(app) => crate::type_transform::cancel_drag(app),
-                    Key::Escape => commit(app),
+                    Key::Escape if app.session.prefs().type_.use_esc_to_commit => commit(app),
+                    Key::Escape => cancel(app),
                     Key::A if m.command => {
                         if let Some(e) = app.ui.text_edit.as_mut() {
                             e.anchor = 0;
@@ -798,6 +799,7 @@ fn font_picker_in(ui: &mut egui::Ui, current: &mut String, width: f32, families:
         let mut focus = opened || ui.data(|d| d.get_temp(focus_id)).unwrap_or(false);
         let mut q: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
         let r = ui.add(egui::TextEdit::singleline(&mut q).hint_text(tl!("Search fonts")).desired_width(200.0));
+        crate::spelling::text_field_menu(&r, &mut q);
         if r.has_focus() {
             focus = false;
         } else if focus {
@@ -1102,6 +1104,7 @@ fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Option<serde_jso
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width((width - 40.0).max(24.0)).id(id.with("edit")));
+        crate::spelling::text_field_menu(&resp, &mut buf);
         if resp.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, buf.clone()));
         } else {
@@ -1546,6 +1549,33 @@ mod tests {
         let doc = &app.session.active().unwrap().doc;
         assert_eq!(doc.layers.last().unwrap().name, "Héllo world");
         assert!(app.ui.text_edit.is_none());
+    }
+
+    #[test]
+    fn escape_cancels_when_use_esc_to_commit_is_off() {
+        let mut app = app();
+        pointer_up(&mut app, [50.0, 100.0], [50.0, 100.0]);
+        insert(&mut app, "Hi");
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), 2);
+        app.session.edit_prefs(|p| p.type_.use_esc_to_commit = false);
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            events: vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            focused: true,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw, |ui| {
+            handle_keys(&mut app, ui.ctx());
+        });
+        out.textures_delta.clear();
+        assert!(app.ui.text_edit.is_none());
+        assert_eq!(app.session.active().unwrap().doc.layers.len(), 1);
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! - Zoom In / Zoom Out (⌘+ / ⌘−) and a Zoom tool click step along [`LADDER`], from any zoom to
 //!   the next step (880 %: in to 1200 %, out to 800 %); they go no lower than 0.1 %, or the
 //!   document's minimum when that is higher;
-//! - ⌥ + wheel multiplies the zoom by 1.1 a notch (`wheel_nav`), and a notch that would pass a
+//! - ⌥ + wheel multiplies the zoom by 1.05 a notch (`wheel_nav`), and a notch that would pass a
 //!   limit stops exactly on it.
 //!
 //! Every way of setting the zoom (wheel, Zoom tool, menu, zoom fields, Navigator, control

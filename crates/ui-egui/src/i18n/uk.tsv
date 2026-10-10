@@ -1577,6 +1577,8 @@
 	Open a document to select a colour range.	Відкрийте документ, щоб виділити колірний діапазон.
 	Saved	Збережено
 	Reveal in Finder	Показати у Finder
+	Reveal in Explorer	Показати у Провіднику
+	Reveal in Files	Показати у Файлах
 	Before (Y)	До (Y)
 	After (X)	Після (X)
 	Original	Оригінал
@@ -2008,6 +2010,8 @@
 	More Points	Більше точок
 	Move Group Down	Перемістити групу вниз
 	Move Group Up	Перемістити групу вгору
+	Dock Group	Прикріпити групу
+	Float Group	Відкріпити групу
 	Move effect layer down	Перемістити шар ефекту вниз
 	Move effect layer up	Перемістити шар ефекту вгору
 	Move to	Перемістити до
@@ -3389,3 +3393,17 @@ cameraRaw	Masking	Маскування
 	Dual Axis	Подвійна вісь
 	Diagonal	Діагональна
 	Transform Symmetry	Трансформувати симетрію
+	Move Up	Вгору
+	Move Down	Вниз
+	Save Set…	Зберегти набір…
+	Soft Dark Theme	Тема Soft Dark
+	Soft Light Theme	Тема Soft Light
+	Soft dark	М’яка темна
+	Soft light	М’яка світла
+	Filter by name	Фільтр за назвою
+	Pencil: draw the curve freehand	Олівець: малювати криву від руки
+	Smooth the curve	Згладити криву
+	115%	115%
+	Recent document sizes	Нещодавні розміри документів
+	Show canvas pattern	Показати візерунок полотна
+	Show rulers in new documents	Показувати лінійки в нових документах

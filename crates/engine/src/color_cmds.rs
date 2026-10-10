@@ -936,7 +936,9 @@ impl Session {
     /// index and a report (`action`, `mismatch`, `ask`) the UI can turn into a prompt.
     pub fn open_document(&mut self, mut doc: Document, path: Option<String>) -> (usize, Value) {
         let report = self.color.open_policy(&mut doc);
-        (self.add_document(doc, path), report)
+        let i = self.add_document(doc, path);
+        self.remember_document_size();
+        (i, report)
     }
 }
 

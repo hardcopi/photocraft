@@ -427,7 +427,11 @@ fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) 
                     app.ui.tool_options.eyedropper_ring = ring;
                 }
                 if let Some(v) = panels {
+                    let prev_double = app.ui.panels.toolbar_double;
                     app.ui.panels = v;
+                    if app.ui.panels.toolbar_double != prev_double {
+                        crate::panels::request_toolbar_layout(ctx);
+                    }
                 }
                 if let Some(m) = mask_target {
                     app.ui.mask_target = m;

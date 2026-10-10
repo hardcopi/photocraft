@@ -100,6 +100,17 @@ pub fn status_info_text(doc: &Document, key: &str, tool: &str, profile: &str) ->
     }
 }
 
+/// Scratch Sizes: document pixels currently in RAM versus free space on the scratch disk.
+fn scratch_status(app: &PhotocraftApp, doc: &Document) -> String {
+    let (_, layered) = document_sizes(doc);
+    let dir = photocraft_engine::scratch::dir(app.session.prefs());
+    let size = match photocraft_engine::scratch::available_bytes(&dir) {
+        Some(avail) => format!("{}/{}", fmt_bytes(layered), fmt_bytes(avail)),
+        None => fmt_bytes(layered),
+    };
+    crate::i18n::fmt(tl!("Scratch: {size}"), &[("size", &size)])
+}
+
 fn profile_name(doc: &Document) -> String {
     let mode = crate::canvas::mode_label(doc);
     let Some(bytes) = doc.icc_profile.as_ref() else {
@@ -128,9 +139,13 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         status_message(app, ui, &t);
         return;
     };
-    let text = status_info_text(&st.doc, &app.ui.chrome.status_info, tl!(app.ui.tool.label()), &profile_name(&st.doc));
+    let text = if app.ui.chrome.status_info == "scratch" {
+        scratch_status(app, &st.doc)
+    } else {
+        status_info_text(&st.doc, &app.ui.chrome.status_info, tl!(app.ui.tool.label()), &profile_name(&st.doc))
+    };
     let mut pct = app.ui.views[i].zoom * 100.0;
-    if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 64.0).changed() {
+    if widgets::value_field(ui, &mut pct, crate::zoom_levels::percent_range(&app.ui.views[i]), "%", 80.0).changed() {
         app.ui.views[i].zoom = crate::zoom_levels::clamp(pct / 100.0, app.ui.views[i].doc_size);
         app.ui.views[i].fit_pending = false;
     }
@@ -279,6 +294,20 @@ mod tests {
         mismatched.mode = photocraft_doc::ColorMode::Grayscale;
         mismatched.icc_profile = Some(photocraft_engine::color_cmds::working_profile(photocraft_doc::ColorMode::Rgb).to_bytes());
         assert_eq!(profile_name(&mismatched), "Invalid Gray profile");
+    }
+
+    #[test]
+    fn scratch_sizes_use_the_scratch_disk() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 2400, "height": 1500, "resolution": 72, "background": "white"})).unwrap();
+        let d = (*app.session.active().unwrap().doc).clone();
+        let text = scratch_status(&app, &d);
+        assert!(text.starts_with("Scratch:"), "{text}");
+        let dir = photocraft_engine::scratch::dir(app.session.prefs());
+        assert!(dir.is_dir(), "{}", dir.display());
+        if photocraft_engine::scratch::available_bytes(&dir).is_some() {
+            assert!(text.contains('/'), "{text}");
+        }
     }
 
     #[test]

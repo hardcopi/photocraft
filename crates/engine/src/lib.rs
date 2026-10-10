@@ -78,6 +78,7 @@ pub mod redeye_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;
 pub mod sample_cmds;
+pub mod scratch;
 pub mod select_extra_cmds;
 pub mod selection_cmds;
 pub mod slice_cmds;

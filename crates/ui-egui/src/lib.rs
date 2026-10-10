@@ -35,6 +35,7 @@ mod camera_raw_scope_ui;
 pub mod camera_raw_ui;
 pub mod canvas;
 pub mod canvas_tool_menu;
+pub mod spelling;
 pub mod channel_view;
 pub mod channels_panel;
 pub mod chrome_ui;
@@ -778,7 +779,11 @@ impl PhotocraftApp {
                 *slot = Some(v);
             }
         }
+        let n_new = views.iter().filter(|v| v.is_none()).count();
         self.ui.views = views.into_iter().map(Option::unwrap_or_default).collect();
+        if n_new > 0 && self.session.prefs().units_and_rulers.show_rulers_in_new_documents {
+            self.ui.extras.rulers = true;
+        }
         self.ui.windows.retain_mut(|w| now(w.document).map(|d| w.document = d).is_some());
         self.canvases.retain(|(doc, _), _| ids.contains(doc));
         self.navigator_textures.retain(|doc, _| ids.contains(doc));
@@ -929,10 +934,11 @@ impl PhotocraftApp {
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb") || photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write)
         });
-        let suggested = match &st.path {
+        let mut suggested = match &st.path {
             Some(p) if writable => p.clone(),
             p => std::path::Path::new(p.as_deref().unwrap_or(&st.doc.name)).with_extension("psd").to_string_lossy().into_owned(),
         };
+        suggested = crate::file_dialog::apply_extension_case(&suggested, self.session.prefs().file_handling.lowercase_extension);
         let doc = st.doc.id;
         self.pick_save(&suggested, move |app, path| {
             app.refocus(doc)?;
@@ -942,6 +948,7 @@ impl PhotocraftApp {
 
     /// [`Self::save_as`] once the path is known.
     fn save_to(&mut self, path: String) -> Result<Value, String> {
+        let path = crate::file_dialog::apply_extension_case(&path, self.session.prefs().file_handling.lowercase_extension);
         // A layered TIFF asks about its layers first (Preferences › File Handling); the save
         // continues from the prompt.
         if tiff_options_ui::wants_prompt(self, &path) {
@@ -1152,7 +1159,7 @@ impl eframe::App for PhotocraftApp {
         }
         shortcuts::clipboard_keys(ctx, ctx.text_edit_focused() || self.ui.text_edit.is_some(), raw_input);
         // Windows sends a touchpad pinch as Ctrl + wheel; make it a pinch again (wheel_nav.rs).
-        if cfg!(target_os = "windows") {
+        if cfg!(target_os = "windows") && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
         raw_input.events.extend(self.take_synthetic_step());

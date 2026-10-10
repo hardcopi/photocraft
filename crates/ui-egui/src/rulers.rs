@@ -163,7 +163,7 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {
                     continue;
                 }
-                line(vertical, *p as f64, guide);
+                line(vertical, *p, guide);
             }
         }
     }
@@ -182,12 +182,12 @@ pub fn guide_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<(bool, usize)> {
     let doc = &app.session.active()?.doc;
     let tol = 4.0 / app.current_zoom().max(0.01) as f64;
     for (i, g) in doc.guides.vertical.iter().enumerate() {
-        if (*g as f64 - x).abs() <= tol {
+        if (*g - x).abs() <= tol {
             return Some((true, i));
         }
     }
     for (i, g) in doc.guides.horizontal.iter().enumerate() {
-        if (*g as f64 - y).abs() <= tol {
+        if (*g - y).abs() <= tol {
             return Some((false, i));
         }
     }
@@ -427,6 +427,20 @@ mod tests {
         assert!(app.session.active().unwrap().doc.guides.vertical.is_empty());
         app.ui.extras.lock_guides = true;
         assert_eq!(guide_at(&app, 0.0, 0.0), None);
+    }
+
+    #[test]
+    fn new_documents_show_rulers_when_the_preference_is_on() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(!app.ui.extras.rulers);
+        app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        app.sync_views();
+        assert!(app.ui.extras.rulers, "default: rulers on for a new document");
+        app.ui.extras.rulers = false;
+        app.run("prefs.set", json!({"path": "unitsAndRulers.showRulersInNewDocuments", "value": false})).unwrap();
+        app.session.execute("file.new", json!({"width": 80, "height": 80})).unwrap();
+        app.sync_views();
+        assert!(!app.ui.extras.rulers);
     }
 
     #[test]

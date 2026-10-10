@@ -1942,6 +1942,8 @@
 	Import Brushes… (.abr)	导入画笔… (.abr)
 	Move Group Down	向下移动组
 	Move Group Up	向上移动组
+	Dock Group	停靠组
+	Float Group	浮动组
 	Reset the brush to the defaults	将画笔重置为默认值
 	Restore original size	还原原始大小
 	Roundness:	圆度：
@@ -2289,3 +2291,17 @@ fontWeight	Italic	斜体
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
+	Move Up	上移
+	Move Down	下移
+	Save Set…	保存套件…
+	Soft Dark Theme	柔和深色主题
+	Soft Light Theme	柔和浅色主题
+	Soft dark	柔和深色
+	Soft light	柔和浅色
+	Filter by name	按名称筛选
+	Pencil: draw the curve freehand	铅笔：徒手绘制曲线
+	Smooth the curve	平滑曲线
+	115%	115%
+	Recent document sizes	最近的文档尺寸
+	Show canvas pattern	显示画布图案
+	Show rulers in new documents	在新文档中显示标尺

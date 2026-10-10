@@ -31,6 +31,22 @@ pub enum FileDialogRequest {
     Save { suggested: String },
 }
 
+/// Lowercase the file extension when Preferences › File Handling › Lowercase Extension is on.
+pub(crate) fn apply_extension_case(path: &str, lowercase: bool) -> String {
+    if !lowercase {
+        return path.to_string();
+    }
+    let p = std::path::Path::new(path);
+    let Some(ext) = p.extension() else {
+        return path.to_string();
+    };
+    let lower = ext.to_string_lossy().to_ascii_lowercase();
+    if ext == std::ffi::OsStr::new(lower.as_str()) {
+        return path.to_string();
+    }
+    p.with_extension(lower).to_string_lossy().into_owned()
+}
+
 impl FileDialogRequest {
     pub fn open(multiple: bool) -> Self {
         Self::Open { multiple, initial_dir: None }

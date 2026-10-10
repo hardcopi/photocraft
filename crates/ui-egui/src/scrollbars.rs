@@ -320,6 +320,7 @@ mod tests {
             app.run("file.new", json!({"width": 2000, "height": 1500})).unwrap();
             app.run("prefs.set", json!({"path": "tools.overscroll", "value": overscroll})).unwrap();
             app.sync_views();
+            app.ui.extras.rulers = false;
             let mut h = Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
                 |ui, app: &mut PhotocraftApp| {
                     let ctx = ui.ctx().clone();

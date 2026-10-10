@@ -697,8 +697,8 @@ impl Layer {
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Guides {
-    pub horizontal: Vec<f32>,
-    pub vertical: Vec<f32>,
+    pub horizontal: Vec<f64>,
+    pub vertical: Vec<f64>,
 }
 
 /// Which areas an alpha channel's overlay colour marks (Channel Options › Color Indicates).

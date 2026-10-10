@@ -25,6 +25,8 @@ pub struct PointCurveDrag {
 pub struct CurvesEditorState {
     pub channel: usize,
     pub gesture: PointCurveState,
+    /// Freehand pencil replaces point-handle editing until turned off.
+    pub pencil: bool,
 }
 
 /// Camera Raw scope preferences are view state, never filter parameters or document history.
@@ -327,7 +329,7 @@ pub struct Panels {
     /// Window › Character / Paragraph: the Character | Paragraph dock group (#150).
     #[serde(default)]
     pub character: bool,
-    /// The toolbar's header chevron: two columns even when one fits (#1197).
+    /// Two-column Tools panel (header chevron or dragging the right edge wide).
     #[serde(default)]
     pub toolbar_double: bool,
     /// The right-hand panel dock. ⇧Tab hides and shows it, as in Photoshop (#1313).

@@ -338,7 +338,18 @@ pub static CATALOG: &[(&[&str], &str, Option<&str>, &str)] = &[
     (&["Layer", "Smart Objects"], "Convert to Smart Object", None, "layer.smartObjects.convertToSmartObject"),
     (&["Layer", "Smart Objects"], "New Smart Object via Copy", None, "layer.smartObjects.newSmartObjectViaCopy"),
     (&["Layer", "Smart Objects"], "---", None, "---"),
-    (&["Layer", "Smart Objects"], "Reveal in Finder", None, "layer.smartObjects.revealInFinder"),
+    (
+        &["Layer", "Smart Objects"],
+        if cfg!(target_os = "macos") {
+            "Reveal in Finder"
+        } else if cfg!(target_os = "windows") {
+            "Reveal in Explorer"
+        } else {
+            "Reveal in Files"
+        },
+        None,
+        "layer.smartObjects.revealInFinder",
+    ),
     (&["Layer", "Smart Objects"], "---", None, "---"),
     (&["Layer", "Smart Objects"], "Update Modified Content", None, "layer.smartObjects.updateModifiedContent"),
     (&["Layer", "Smart Objects"], "Update All Modified Content", None, "layer.smartObjects.updateAllModifiedContent"),

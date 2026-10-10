@@ -2018,6 +2018,8 @@
 	More Points	Больше точек
 	Move Group Down	Переместить группу вниз
 	Move Group Up	Переместить группу вверх
+	Dock Group	Прикрепить группу
+	Float Group	Открепить группу
 	Move effect layer down	Переместить слой эффекта вниз
 	Move effect layer up	Переместить слой эффекта вверх
 	Move to	Переместить в
@@ -2554,3 +2556,17 @@ fontWeight	Italic	Курсив
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
+	Move Up	Вверх
+	Move Down	Вниз
+	Save Set…	Сохранить набор…
+	Soft Dark Theme	Тема Soft Dark
+	Soft Light Theme	Тема Soft Light
+	Soft dark	Мягкая тёмная
+	Soft light	Мягкая светлая
+	Filter by name	Фильтр по имени
+	Pencil: draw the curve freehand	Карандаш: рисовать кривую от руки
+	Smooth the curve	Сгладить кривую
+	115%	115%
+	Recent document sizes	Недавние размеры документов
+	Show canvas pattern	Показать узор холста
+	Show rulers in new documents	Показывать линейки в новых документах

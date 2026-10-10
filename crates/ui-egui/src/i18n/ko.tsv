@@ -1900,6 +1900,8 @@
 	Import Brushes… (.abr)	브러시 가져오기… (.abr)
 	Move Group Down	그룹 아래로 이동
 	Move Group Up	그룹 위로 이동
+	Dock Group	그룹 도킹
+	Float Group	그룹 띄우기
 	Reset the brush to the defaults	브러시를 기본값으로 초기화
 	Restore original size	원래 크기 복원
 	Roundness:	원형률:
@@ -2860,3 +2862,17 @@ fontWeight	Italic	기울임
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
+	Move Up	위로
+	Move Down	아래로
+	Save Set…	세트 저장…
+	Soft Dark Theme	소프트 다크 테마
+	Soft Light Theme	소프트 라이트 테마
+	Soft dark	소프트 다크
+	Soft light	소프트 라이트
+	Filter by name	이름으로 필터
+	Pencil: draw the curve freehand	연필: 곡선을 자유롭게 그리기
+	Smooth the curve	곡선 부드럽게
+	115%	115%
+	Recent document sizes	최근 문서 크기
+	Show canvas pattern	캔버스 패턴 표시
+	Show rulers in new documents	새 문서에서 눈금자 표시

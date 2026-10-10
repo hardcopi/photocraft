@@ -76,29 +76,71 @@ fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
     sections
 }
 
+fn toolbar_force_id() -> egui::Id {
+    egui::Id::new("toolbar-force-width")
+}
+
+fn toolbar_resize_id() -> egui::Id {
+    egui::Id::new("toolbar").with("__resize")
+}
+
+/// Snap the Tools panel to one or two columns on the next frame (header chevron, `ui.set`).
+pub fn request_toolbar_layout(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(toolbar_force_id(), true));
+}
+
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
     let sections = visible_sections(&app.session.prefs().toolbar.hidden);
-    // Two columns when the header chevron asks for them, or when one column doesn't fit.
-    let slots: usize = sections.iter().map(Vec::len).sum();
-    let double = app.ui.panels.toolbar_double || toolbar_needs_double(slots, sections.len(), bx, t.pro, ui.available_rect_before_wrap().height());
-    let w = if double { w1 + bx + 2.0 } else { w1 };
-    egui::Panel::left("toolbar").resizable(false).exact_size(w).frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8))).show(
+    // One or two columns from the header chevron or by dragging the right edge (Photoshop).
+    // A short window used to force two columns and lock the width, so the handle did nothing.
+    let w_single = w1;
+    let w_double = w1 + bx + 2.0;
+    let double_pref = app.ui.panels.toolbar_double;
+    // Two-column rows are ~as wide as the two-column panel. Their min-rect becomes the
+    // frame size, so `shown` never drops during a shrink-drag and the panel pops back.
+    // Commit (and reflow) from the handle pointer instead of that min-rect.
+    let resize = ui.ctx().read_response(toolbar_resize_id());
+    let handle_dragging = resize.as_ref().is_some_and(|r| r.dragged());
+    let handle_width = resize
+        .as_ref()
+        .filter(|r| r.dragged() || r.drag_stopped())
+        .and_then(|r| r.interact_pointer_pos())
+        .map(|p| (p.x - ui.available_rect_before_wrap().left()).clamp(w_single, w_double));
+    let double = handle_width.map_or(double_pref, |w| toolbar_snaps_double(w, double_pref, w_single, w_double));
+    let w = if double_pref { w_double } else { w_single };
+    let force = ui.ctx().data_mut(|d| d.remove_temp::<bool>(toolbar_force_id())).unwrap_or(false);
+    let mut panel = egui::Panel::left("toolbar")
+        .resizable(true)
+        .default_size(w)
+        .size_range(w_single..=w_double)
+        .show_separator_line(false)
+        .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(m, 8)));
+    if force {
+        panel = panel.exact_size(w);
+    }
+    let header = std::cell::Cell::new(false);
+    let inner = panel.show(
         ui,
         |ui| {
+            // Two-column tool rows are wider than one column. If they expand the
+            // panel, a shrink-drag clips then stores the old width and pops back.
+            ui.set_width(ui.available_width());
+            let r = ui.max_rect();
             if t.pro {
-                let r = ui.max_rect();
                 ui.painter().line_segment([r.right_top() + vec2(m as f32, -8.0), r.right_bottom() + vec2(m as f32, 8.0)], Stroke::new(1.0, t.separator));
-                // Photoshop's toolbar header chevrons switch between one and two columns.
-                let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
-                icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
-                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
-                if resp.clicked() {
-                    app.ui.panels.toolbar_double = !app.ui.panels.toolbar_double;
-                }
-                ui.add_space(4.0);
             }
+            // Photoshop's toolbar header chevrons switch between one and two columns.
+            let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
+            icons::paint(ui, cr, if double { "chevrons-left" } else { "chevrons-right" }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Toolbar")));
+            if resp.clicked() {
+                app.ui.panels.toolbar_double = !app.ui.panels.toolbar_double;
+                request_toolbar_layout(ui.ctx());
+                header.set(true);
+            }
+            ui.add_space(4.0);
             // Subtle violet wash at the bottom of the toolbar.
             let full = ui.max_rect();
             if !t.bevel && !t.pro && t.dark() {
@@ -122,6 +164,13 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             // Pro has no group dividers, so its two columns fill every row across groups.
             let sections: Vec<Vec<(usize, Vec<Tool>)>> = if t.pro { vec![sections.into_iter().flatten().collect()] } else { sections };
+            let footer_h = chips_height(t.pro) + if t.pro { 16.0 + 2.0 * (bx + 3.0) } else { 14.0 };
+            let tools_h = (ui.available_height() - footer_h).max(bx + 8.0);
+            let ctx = ui.ctx().clone();
+            // Overlay the bar so a short window doesn't steal a column of width from the tools.
+            ui.spacing_mut().scroll.floating = true;
+            ui.spacing_mut().scroll.floating_allocated_width = 0.0;
+            egui::ScrollArea::vertical().id_salt("toolbar-tools").auto_shrink([false, false]).max_height(tools_h).show(ui, |ui| {
             for (si, section) in sections.iter().enumerate() {
                 // Photoshop 2026 draws one uninterrupted column (no group dividers).
                 if si > 0 && !t.pro {
@@ -240,10 +289,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     });
                 }
             }
-            let ctx = ui.ctx().clone();
             if t.pro && icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {
                 let _ = crate::menus::invoke(app, &ctx, "edit.toolbar", json!({}));
             }
+            });
             ui.add_space(if t.pro { 8.0 } else { 14.0 });
             color_chips(app, ui);
             if t.pro {
@@ -282,6 +331,28 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         },
     );
+    let shown = handle_width.unwrap_or(inner.response.rect.width());
+    if !header.get() {
+        // Midpoint snap bounced a 2→1 drag back to two columns: the travel is only ~32px, so
+        // letting go short of halfway looked like a shrink then a pop. Hysteresis from the
+        // current count: a few pixels inward commits one column, a few outward commits two.
+        app.ui.panels.toolbar_double = toolbar_snaps_double(shown, double_pref, w_single, w_double);
+        // Don't exact-size while the handle is down — that fights the drag. On release, snap
+        // to one or two columns so an in-between width never sticks.
+        if !handle_dragging {
+            let snap = if app.ui.panels.toolbar_double { w_double } else { w_single };
+            if (shown - snap).abs() > 0.5 {
+                request_toolbar_layout(ui.ctx());
+            }
+        }
+    }
+}
+
+/// Pixels the resize edge must move before a drag commits the other column count.
+const TOOLBAR_SNAP: f32 = 6.0;
+
+fn toolbar_snaps_double(shown: f32, currently_double: bool, w_single: f32, w_double: f32) -> bool {
+    if currently_double { shown > w_double - TOOLBAR_SNAP } else { shown >= w_single + TOOLBAR_SNAP }
 }
 
 /// Does the toolbar need two columns? Height of one column (header, tool slots, Edit Toolbar,
@@ -292,7 +363,8 @@ pub fn toolbar_needs_double(slots: usize, sections: usize, bx: f32, pro: bool, a
         // margins + header + slots + "…" + gap + colour chips + gap + 2 buttons
         16.0 + 21.0 + (slots + 1) as f32 * pitch + 8.0 + chips_height(true) + 8.0 + 2.0 * pitch
     } else {
-        16.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + chips_height(false)
+        // margins + header chevron + slots + group dividers + gap + colour chips
+        16.0 + 18.0 + slots as f32 * pitch + sections.saturating_sub(1) as f32 * 12.0 + 14.0 + chips_height(false)
     };
     needed > avail_h
 }
@@ -3650,6 +3722,130 @@ mod toolbar_tests {
         h.run_steps(2);
         assert!(!h.state().ui.panels.toolbar_double);
         assert_eq!(left(&h), single);
+    }
+
+    /// Studio (and Classic) also get the header chevron; it used to be Pro-only, so those
+    /// themes had no way to widen the Tools panel.
+    #[test]
+    fn header_chevron_toggles_two_columns_in_studio() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 1400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    toolbar(app, ui);
+                    let left = ui.available_rect_before_wrap().left();
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("toolbar-test-left"), left));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(2);
+        let left = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("toolbar-test-left"))).unwrap_or(0.0);
+        let single = left(&h);
+        h.get_by_label("Toolbar").click();
+        h.run_steps(2);
+        assert!(h.state().ui.panels.toolbar_double);
+        assert!(left(&h) > single + 20.0, "the toolbar did not widen: {single} -> {}", left(&h));
+    }
+
+    #[test]
+    fn toolbar_snap_uses_hysteresis_not_the_midpoint() {
+        let (lo, hi) = (40.0, 72.0);
+        let mid = (lo + hi) * 0.5;
+        assert!(toolbar_snaps_double(hi, true, lo, hi));
+        assert!(toolbar_snaps_double(hi - 1.0, true, lo, hi), "a 1px inward nudge stays at two columns");
+        assert!(!toolbar_snaps_double(hi - TOOLBAR_SNAP - 1.0, true, lo, hi), "a short inward drag commits one column");
+        assert!(!toolbar_snaps_double(mid, true, lo, hi), "midpoint from two columns is already one column");
+        assert!(!toolbar_snaps_double(lo, false, lo, hi));
+        assert!(!toolbar_snaps_double(lo + 1.0, false, lo, hi), "a 1px outward nudge stays at one column");
+        assert!(toolbar_snaps_double(lo + TOOLBAR_SNAP, false, lo, hi), "a short outward drag commits two columns");
+        assert!(toolbar_snaps_double(mid, false, lo, hi), "midpoint from one column is already two columns");
+    }
+
+    fn drag_edge(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        for i in 1..=6 {
+            h.event(egui::Event::PointerMoved(from + vec2((to.x - from.x) * (i as f32 / 6.0), (to.y - from.y) * (i as f32 / 6.0))));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+    }
+
+    /// Dragging the Tools panel's right edge a little past one column snaps to two columns.
+    #[test]
+    fn dragging_the_toolbar_edge_switches_to_two_columns() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 1400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    toolbar(app, ui);
+                    let left = ui.available_rect_before_wrap().left();
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("toolbar-test-left"), left));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.run_steps(2);
+        let left = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("toolbar-test-left"))).unwrap_or(0.0);
+        let single = left(&h);
+        assert!(!h.state().ui.panels.toolbar_double);
+        drag_edge(&mut h, pos2(single - 1.0, 200.0), pos2(single + 50.0, 200.0));
+        assert!(h.state().ui.panels.toolbar_double, "dragging the edge did not switch to two columns");
+        assert!(left(&h) > single + 20.0, "the toolbar did not widen: {single} -> {}", left(&h));
+        let wide = left(&h);
+        let handle_x = h
+            .ctx
+            .read_response(egui::Id::new("toolbar").with("__resize"))
+            .map(|r| r.rect.center().x)
+            .unwrap_or(wide - 1.0);
+        // Two-column tool rows used to keep the panel at `wide`, so an inward drag
+        // clipped then popped back. Commit from the handle pointer, not the min-rect.
+        drag_edge(&mut h, pos2(handle_x, 200.0), pos2(single + 2.0, 200.0));
+        assert!(
+            !h.state().ui.panels.toolbar_double,
+            "dragging inward popped back to two columns (single={single} wide={wide} now={} double={})",
+            left(&h),
+            h.state().ui.panels.toolbar_double
+        );
+        assert!((left(&h) - single).abs() < 2.0, "did not shrink: {wide} -> {}", left(&h));
+    }
+
+    /// An 800-tall window cannot fit one column of tools. That used to force two columns and
+    /// disable the resize handle, so drag and the chevron did nothing.
+    #[test]
+    fn short_window_still_lets_the_toolbar_switch_columns() {
+        let slots: usize = TOOL_SECTIONS.iter().map(|s| s.len()).sum();
+        assert!(toolbar_needs_double(slots, TOOL_SECTIONS.len(), 30.0, true, 700.0), "precondition: one column does not fit");
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(800.0, 720.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    toolbar(app, ui);
+                    let left = ui.available_rect_before_wrap().left();
+                    ui.data_mut(|d| d.insert_temp(egui::Id::new("toolbar-test-left"), left));
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
+        h.run_steps(2);
+        let left = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.ctx.data(|d| d.get_temp::<f32>(egui::Id::new("toolbar-test-left"))).unwrap_or(0.0);
+        let single = left(&h);
+        assert!(!h.state().ui.panels.toolbar_double, "a short window must not lock two columns");
+        h.get_by_label("Toolbar").click();
+        h.run_steps(2);
+        assert!(h.state().ui.panels.toolbar_double);
+        assert!(left(&h) > single + 20.0, "chevron on a short window: {single} -> {}", left(&h));
+        h.get_by_label("Toolbar").click();
+        h.run_steps(2);
+        assert!(!h.state().ui.panels.toolbar_double);
+        assert!((left(&h) - single).abs() < 1.0, "chevron back to one column: {}", left(&h));
     }
 
     fn click(h: &mut egui_kittest::Harness<'_, PhotocraftApp>, p: egui::Pos2) {

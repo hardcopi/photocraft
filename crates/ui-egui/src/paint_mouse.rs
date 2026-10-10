@@ -203,6 +203,7 @@ mod tests {
         }
         app.ui.tool = Tool::Brush;
         app.sync_views();
+        app.ui.extras.rulers = false;
         let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 let ctx = ui.ctx().clone();

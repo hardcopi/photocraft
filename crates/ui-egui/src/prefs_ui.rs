@@ -78,8 +78,10 @@ fn theme_kind(t: Theme) -> ThemeKind {
     match t {
         Theme::Pro => ThemeKind::Pro,
         Theme::ProMedium => ThemeKind::ProMedium,
+        Theme::SoftDark => ThemeKind::SoftDark,
         Theme::Studio => ThemeKind::Studio,
         Theme::StudioLight => ThemeKind::StudioLight,
+        Theme::SoftLight => ThemeKind::SoftLight,
         Theme::Classic => ThemeKind::Classic,
     }
 }
@@ -88,8 +90,10 @@ fn theme_pref(k: ThemeKind) -> Theme {
     match k {
         ThemeKind::Pro => Theme::Pro,
         ThemeKind::ProMedium => Theme::ProMedium,
+        ThemeKind::SoftDark => Theme::SoftDark,
         ThemeKind::Studio => Theme::Studio,
         ThemeKind::StudioLight => Theme::StudioLight,
+        ThemeKind::SoftLight => Theme::SoftLight,
         ThemeKind::Classic => Theme::Classic,
     }
 }
@@ -820,7 +824,7 @@ fn choice_label(v: &str) -> String {
     match v {
         "cm" => "Centimeters".into(),
         "mm" => "Millimeters".into(),
-        "75" | "100" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
+        "75" | "100" | "115" | "125" | "150" | "175" | "200" | "250" | "300" => format!("{v}%"),
         "8" => "8 Bits/Channel".into(),
         "16" => "16 Bits/Channel".into(),
         "postScript" => "PostScript (72 points/inch)".into(),
@@ -1014,7 +1018,7 @@ fn section_fields(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>
             if prefs::is_hidden(&path)
                 || (section == "performance" && matches!(k.as_str(), "useGpu" | "gpuBackend" | "renderingMode"))
                 || (section == "export" && !export_field_visible(obj, &k))
-                || (section == "fileHandling" && matches!(k.as_str(), "lastOpenDir" | "lastSaveDir"))
+                || (section == "fileHandling" && matches!(k.as_str(), "lastOpenDir" | "lastSaveDir" | "recentDocumentSizes"))
             {
                 continue;
             }
@@ -1327,22 +1331,44 @@ fn toolbar_tab(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let mut kind = f.get("kind").and_then(Value::as_str).unwrap_or("brushes").to_string();
+    let mut query = f.get("query").and_then(Value::as_str).unwrap_or("").to_string();
+    let mut selected_reset = false;
+    ui.horizontal_wrapped(|ui| {
+        for (id, label) in [
+            ("brushes", tl!("Brushes")),
+            ("customShapes", tl!("Custom Shapes")),
+            ("patterns", tl!("Patterns")),
+            ("gradients", tl!("Gradients")),
+            ("swatches", tl!("Swatches")),
+            ("styles", tl!("Styles")),
+        ] {
+            if ui.selectable_label(kind == id, label).clicked() {
+                kind = id.to_string();
+                selected_reset = true;
+            }
+        }
+    });
     ui.horizontal(|ui| {
-        ui.label(RichText::new(tl!("Preset Type")).color(t.text_dim));
-        let opts = [("brushes".to_string(), tl!("Brushes")), ("customShapes".to_string(), tl!("Custom Shapes")), ("patterns".to_string(), tl!("Patterns"))];
-        crate::widgets::dropdown(ui, "preset-kind", &mut kind, &opts, 180.0);
+        ui.label(RichText::new(tl!("Search")).color(t.text_dim));
+        ui.add(egui::TextEdit::singleline(&mut query).desired_width(220.0).hint_text(tl!("Filter by name")));
     });
     let list = app
         .session
-        .execute("edit.presets.presetManager", json!({"kind": kind}))
+        .execute("edit.presets.presetManager", json!({"kind": kind, "query": query}))
         .ok()
         .and_then(|v| v.get(&kind).cloned())
-        .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+        .and_then(|v| v.as_array().cloned())
         .unwrap_or_default();
     let mut selected = f.get("selected").and_then(Value::as_u64).unwrap_or(0) as usize;
+    if selected_reset {
+        selected = 0;
+    }
     egui::ScrollArea::vertical().max_height(260.0).id_salt("preset-list").show(ui, |ui| {
-        for (i, name) in list.iter().enumerate() {
-            if ui.selectable_label(i == selected, name).clicked() {
+        for (i, item) in list.iter().enumerate() {
+            let name = item.get("name").and_then(Value::as_str).unwrap_or("");
+            let group = item.get("group").and_then(Value::as_str).unwrap_or("");
+            let label = if group.is_empty() { name.to_string() } else { format!("{name}  ({group})") };
+            if ui.selectable_label(i == selected, label).clicked() {
                 selected = i;
                 f.insert("newName".into(), json!(name));
             }
@@ -1360,14 +1386,36 @@ fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, 
         if ui.add_enabled(selected < list.len(), egui::Button::new(tl!("Delete"))).clicked() {
             let _ = app.run("edit.presets.presetManager", json!({"action": "delete", "kind": kind, "index": selected}));
         }
-        // Load Photoshop brushes (.abr) into the library.
-        if kind == "brushes" && ui.button(tl!("Load…")).on_hover_text(tl!("Import Photoshop brushes (.abr)")).clicked() {
-            let _ = app.open_dialog_file();
+        if ui.add_enabled(selected > 0, egui::Button::new(tl!("Move Up"))).clicked() {
+            let _ = app.run("edit.presets.presetManager", json!({"action": "move", "kind": kind, "index": selected, "to": selected.saturating_sub(1)}));
+            selected = selected.saturating_sub(1);
+        }
+        if ui.add_enabled(selected + 1 < list.len(), egui::Button::new(tl!("Move Down"))).clicked() {
+            let _ = app.run("edit.presets.presetManager", json!({"action": "move", "kind": kind, "index": selected, "to": selected + 1}));
+            selected += 1;
+        }
+        if ui.button(tl!("Load…")).clicked() {
+            let kind_load = kind.clone();
+            let _ = app.pick_file_bytes(move |app, name, bytes| {
+                let mut p = json!({"action": "load", "kind": kind_load, "fileName": name});
+                match serde_json::from_slice::<Value>(&bytes) {
+                    Ok(v) if v.get("format").and_then(Value::as_str) == Some("photocraft-preset-set") => p["data"] = v,
+                    _ => p["bytes"] = json!(photocraft_engine::paint::tile::b64_encode(&bytes)),
+                }
+                app.run("edit.presets.presetManager", p)
+            });
+        }
+        if ui.button(tl!("Save Set…")).clicked() {
+            let kind_save = kind.clone();
+            let _ = app.pick_save(&format!("{kind}.json"), move |app, path| {
+                app.run("edit.presets.presetManager", json!({"action": "save", "kind": kind_save, "path": path}))
+            });
         }
     });
     f.insert("kind".into(), json!(kind));
     f.insert("selected".into(), json!(selected));
     f.insert("newName".into(), json!(new_name));
+    f.insert("query".into(), json!(query));
 }
 
 fn presets_io_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -1569,7 +1617,7 @@ mod tests {
                 }
                 let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
                 for k in obj.keys() {
-                    if sec == "fileHandling" && matches!(k.as_str(), "lastOpenDir" | "lastSaveDir") {
+                    if sec == "fileHandling" && matches!(k.as_str(), "lastOpenDir" | "lastSaveDir" | "recentDocumentSizes") {
                         continue;
                     }
                     let mut labels = vec![humanize(k)];
@@ -1676,12 +1724,15 @@ mod tests {
         let store = Arc::new(Mutex::new(None));
         let fail = Arc::new(AtomicBool::new(true));
         let mut app = app_on(&store, fail.clone());
-        tick(&mut app, &egui::Context::default());
+        let ctx = egui::Context::default();
+        fail.store(false, Ordering::Relaxed);
+        tick(&mut app, &ctx);
+        fail.store(true, Ordering::Relaxed);
         app.run("prefs.set", json!({"values": {"interface.theme": "studio"}})).unwrap();
         // The write fails: reported, and retried after a backoff rather than marked saved.
         assert_eq!(persist(&mut app, 100.0), Some(SAVE_RETRY_S));
         assert!(app.ui.status.starts_with("Couldn't save preferences: storage is full") && app.ui.status_error);
-        assert!(store.lock().unwrap().is_none());
+        assert_ne!(stored(&store)["interface"]["theme"], "studio", "failed write must not replace the flushed defaults");
         assert_eq!(persist(&mut app, 101.0), Some(1.0), "not due yet");
         // Storage works again: the pending change is written without another edit.
         fail.store(false, Ordering::Relaxed);
@@ -1764,7 +1815,7 @@ mod tests {
             step(vec2(2560.0, 1440.0), 1.75, 1.75);
             step(vec2(3840.0, 2160.0), 1.0, 2.0);
         }
-        for (pref, expected) in [("200", 2.0), ("125", 1.25), ("150", 1.5), ("100", 1.0), ("auto", 1.5)] {
+        for (pref, expected) in [("200", 2.0), ("125", 1.25), ("115", 1.15), ("150", 1.5), ("100", 1.0), ("auto", 1.5)] {
             app.run("prefs.set", json!({"values": {"interface.uiScale": pref}})).unwrap();
             let mut input = egui::RawInput::default();
             input.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
@@ -1853,14 +1904,18 @@ mod tests {
         let values = prefs::Preferences::default().to_json();
         assert!(has_visible_fields(&values, "general"));
         assert!(has_visible_fields(&values, "fileHandling"));
+        assert!(has_visible_fields(&values, "type"), "Type › Recent fonts");
         // Every setting of these sections is still unimplemented.
-        for section in ["type", "integrations", "scratchDisks"] {
-            assert!(!has_visible_fields(&values, section), "{section}");
-        }
-        // Rotate View with Trackpad is live; the other Enhanced Controls rows stay hidden.
+        assert!(!has_visible_fields(&values, "integrations"));
+        assert!(has_visible_fields(&values, "scratchDisks"), "Scratch Disks › Disks");
+        // Rotate View with Trackpad and pinch zoom are live; the other Enhanced Controls rows stay hidden.
         assert!(has_visible_fields(&values, "enhancedControls"));
         assert!(!prefs::is_hidden("enhancedControls.rotateViewWithTrackpad"));
-        assert!(prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
+        assert!(!prefs::is_hidden("enhancedControls.zoomWithTrackpadPinch"));
+        assert!(!prefs::is_hidden("scratchDisks.disks"));
+        assert!(!prefs::is_hidden("workspace.largeTabs"));
+        assert!(!prefs::is_hidden("type.useEscToCommit"));
+        assert!(!prefs::is_hidden("performance.effectCacheMb"));
         // Camera Raw Defaults shows only "Open in Camera Raw" so far.
         assert!(has_visible_fields(&values, "rawDefaults"));
         assert!(!prefs::is_hidden("rawDefaults.openInCameraRaw"));

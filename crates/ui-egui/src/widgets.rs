@@ -1,7 +1,7 @@
 //! Custom widgets for the Photocraft look: cards with pill tabs, thin sliders with round knobs,
 //! monospace value fields with dimmed units, toggle switches, primary/secondary buttons.
 
-use egui::{Align2, Color32, CornerRadius, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
+use egui::{Align2, Color32, CornerRadius, CursorIcon, Pos2, Rect, Response, Sense, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
 
 use crate::theme::{self, Tokens};
 
@@ -220,7 +220,7 @@ fn value_field_in(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<
             ui.style_mut().override_font_id = Some(theme::mono(12.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
-                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine)).inner
+                ui.allocate_ui_with_layout(field.size(), layout, |ui| number_edit(ui, value, range, fine, suffix)).inner
             })
             .inner
         }
@@ -342,12 +342,13 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
 /// The number in a [`value_field`]. A typed number applies as it's typed; arithmetic waits for
 /// Enter, Tab or click-away, because per keystroke `5/2` would land first and a caller that
 /// rounds it would cut `5/2*2` short. `changed()` means a new value, not just a keystroke.
-fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, fine: bool) -> Response {
+fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>, fine: bool, suffix: &str) -> Response {
     let (id, ctx) = (ui.next_auto_id(), ui.ctx().clone());
     let held = id.with("arithmetic");
     let math = ui.memory(|m| m.has_focus(id)) && ui.data(|d| d.get_temp(held)).unwrap_or(false);
     ui.data_mut(|d| d.insert_temp(held, math));
     let before = *value;
+    let units = length_parse_args(suffix, &range);
     let mut resp = ui.add(
         egui::DragValue::new(value)
             .range(range)
@@ -356,7 +357,10 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
             .update_while_editing(!math)
             // Focus is read when parsing, not above: Tab hands it on inside `ui.add`.
             .custom_parser(move |s| {
-                let v = parse_num(s);
+                let v = match units {
+                    Some((dpi, extent)) => parse_num_in(s, dpi, extent),
+                    None => parse_num(s),
+                };
                 if ctx.memory(|m| m.has_focus(id)) && plain(s).is_none() {
                     // Still typing arithmetic: hold it, and stop applying keystrokes once it parses.
                     ctx.data_mut(|d| d.insert_temp(held, v.is_some()));
@@ -367,6 +371,21 @@ fn number_edit(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
     );
     resp.flags.set(egui::response::Flags::CHANGED, *value != before);
     resp
+}
+
+/// Dpi and %-extent for [`parse_num_in`] when this field's suffix is a length unit.
+fn length_parse_args(suffix: &str, range: &std::ops::RangeInclusive<f32>) -> Option<(f64, f64)> {
+    let unit = suffix.trim().to_ascii_lowercase();
+    if !is_length_unit(&unit) {
+        return None;
+    }
+    let extent = if unit == "%" {
+        let span = f64::from(*range.end()) - f64::from(*range.start());
+        if span.is_finite() { span.abs() } else { 0.0 }
+    } else {
+        0.0
+    };
+    Some((72.0, extent))
 }
 
 /// Increments a numerical field with the up/down arrow keys. Increments by 1 by default, 10 with shift, and 0.1 with ctrl/cmd.
@@ -407,7 +426,7 @@ pub fn slider(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32>
 /// Shift. (Up/Down in the field are every value field's, see [`value_field`].)
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RowGestures {
-    /// A double-click on the slider (knob or track; not the label or field) sets this value.
+    /// A double-click on the slider (knob or track) or on the row's label sets this value.
     pub reset: Option<f32>,
     /// Each wheel notch over the slider moves the value by this step (up = higher; ×10 with
     /// Shift). Photoshop does this in dialogs, not in the Properties panel.
@@ -550,6 +569,8 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         painter.circle_filled(knob, kr, if t.pro { Color32::from_gray(236) } else { Color32::WHITE });
         if t.pro {
             painter.circle_stroke(knob, kr, Stroke::new(1.0, Color32::from_gray(40)));
+        } else if !t.dark() {
+            painter.circle_stroke(knob, kr, Stroke::new(1.0, t.field_border));
         }
         if resp.hovered() || resp.dragged() {
             painter.circle_stroke(knob, 9.5, Stroke::new(2.0, t.accent_soft));
@@ -573,23 +594,63 @@ pub fn slider_row_with(
     gradient: Option<&[Color32]>,
     g: RowGestures,
 ) -> Response {
-    let t = Tokens::get(ui.ctx());
-    let mut changed_resp = None;
+    let track_w = (ui.available_width() - 14.0).max(1.0);
+    let mut extra_changed = false;
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!(label)).color(t.text_dim));
+        extra_changed |= scrub_label(ui, label, value, range.clone(), track_w, g.reset);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            changed_resp = Some(value_field(ui, value, range.clone(), suffix, 74.0));
+            extra_changed |= value_field(ui, value, range.clone(), suffix, 74.0).changed();
         });
     });
-    let s = slider_with(ui, value, range, gradient, g);
-    let mut r = s.clone();
-    if let Some(v) = changed_resp
-        && v.changed()
-    {
+    let mut r = slider_with(ui, value, range, gradient, g);
+    if extra_changed {
         r.mark_changed();
     }
     ui.add_space(4.0);
     r
+}
+
+/// Photoshop-style scrubby label: drag left/right to move the value across `range`; a double-click
+/// sets `reset` when it is `Some`.
+fn scrub_label(ui: &mut Ui, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, track_w: f32, reset: Option<f32>) -> bool {
+    let t = Tokens::get(ui.ctx());
+    let text = tl!(label).to_owned();
+    let galley = ui.painter().layout_no_wrap(text.clone(), egui::TextStyle::Body.resolve(ui.style()), t.text_dim);
+    let size = vec2(galley.size().x.max(1.0), galley.size().y.max(18.0));
+    let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    ui.painter().galley_with_override_text_color(pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, t.text_dim);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), &text));
+    if resp.dragged() {
+        ui.ctx().set_cursor_icon(CursorIcon::Grabbing);
+    } else if resp.hovered() {
+        ui.ctx().set_cursor_icon(CursorIcon::Grab);
+    }
+    let (lo, hi) = (*range.start(), *range.end());
+    let start_key = resp.id.with("scrub-start");
+    if resp.drag_started() {
+        ui.data_mut(|d| d.insert_temp(start_key, *value));
+    }
+    let mut changed = false;
+    if resp.dragged()
+        && let (Some(start), Some(origin), Some(pos)) =
+            (ui.data(|d| d.get_temp::<f32>(start_key)), ui.input(|i| i.pointer.press_origin()), resp.interact_pointer_pos())
+    {
+        let v = start + (pos.x - origin.x) / track_w * (hi - lo);
+        let v = if lo <= hi && v.is_finite() { v.clamp(lo, hi) } else { start };
+        if v != *value {
+            *value = v;
+            resp.mark_changed();
+            changed = true;
+        }
+    }
+    if let Some(reset) = reset
+        && second_click(ui, &resp)
+    {
+        *value = reset;
+        resp.mark_changed();
+        changed = true;
+    }
+    changed
 }
 
 /// iOS-style toggle switch.
@@ -833,7 +894,34 @@ pub fn dropdown_hovered<T: PartialEq + Clone>(ui: &mut Ui, id: &str, current: &m
         }
     });
     let stepped = combo_box_arrow_keys(ui, &response.response, current, options);
-    (changed || stepped, hovered)
+    let wheeled = combo_box_wheel(ui, &response.response, current, options);
+    (changed || stepped || wheeled, hovered)
+}
+
+/// Next/previous option, wrapping. `delta > 0` moves forward through `options`.
+pub fn step_cyclic<T: PartialEq + Clone>(current: &T, options: &[(T, &str)], delta: i32) -> Option<T> {
+    if options.is_empty() || delta == 0 {
+        return None;
+    }
+    let n = options.len() as i32;
+    let i = options.iter().position(|(v, _)| v == current).unwrap_or(0) as i32;
+    let next = (i + delta).rem_euclid(n) as usize;
+    options.get(next).map(|(v, _)| v.clone()).filter(|v| v != current)
+}
+
+fn combo_box_wheel<T: PartialEq + Clone>(ui: &mut Ui, response: &Response, current: &mut T, options: &[(T, &str)]) -> bool {
+    if !response.hovered() && !egui::ComboBox::is_open(ui.ctx(), response.id) {
+        return false;
+    }
+    let n = wheel_notches(ui, response);
+    let delta = n.round() as i32;
+    if delta == 0 {
+        return false;
+    }
+    let Some(next) = step_cyclic(current, options, delta) else { return false };
+    *current = next;
+    ui.ctx().input_mut(|i| i.smooth_scroll_delta = Vec2::ZERO);
+    true
 }
 
 /// Give a dropdown keyboard focus when it opens, then use the arrow keys to move through its
@@ -933,14 +1021,20 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, curre
 
 /// Paint a small checkerboard (transparency) in `rect`.
 pub fn checker(painter: &egui::Painter, rect: Rect, cell: f32) {
-    painter.rect_filled(rect, 0.0, Color32::from_gray(250));
+    checker_with(painter, rect, cell, Color32::from_gray(250), Color32::from_gray(214));
+}
+
+/// Transparency checkerboard using explicit light/dark colours.
+pub fn checker_with(painter: &egui::Painter, rect: Rect, cell: f32, light: Color32, dark: Color32) {
+    painter.rect_filled(rect, 0.0, light);
+    let cell = cell.max(1.0);
     let nx = (rect.width() / cell).ceil() as i32;
     let ny = (rect.height() / cell).ceil() as i32;
     for j in 0..ny {
         for i in 0..nx {
             if (i + j) % 2 == 1 {
                 let r = Rect::from_min_size(Pos2::new(rect.left() + i as f32 * cell, rect.top() + j as f32 * cell), Vec2::splat(cell)).intersect(rect);
-                painter.rect_filled(r, 0.0, Color32::from_gray(214));
+                painter.rect_filled(r, 0.0, dark);
             }
         }
     }
@@ -999,10 +1093,24 @@ pub fn fmt_num2(v: f64) -> String {
 
 /// Parses a typed number or simple arithmetic such as `1280*2` or `20*2+5-2` (`+ - * /`,
 /// `*` and `/` first). Like egui's own parser it ignores whitespace and reads `−` as `-`.
-/// `None` for anything else, including a division by zero.
+/// `None` for anything else, including a division by zero or a unit suffix (see [`parse_num_in`]).
 pub fn parse_num(text: &str) -> Option<f64> {
+    eval(text, None)
+}
+
+/// [`parse_num`] plus length units (`px`, `in`/`inch`/`inches`, `cm`, `mm`, `pt`/`pts`/`points`,
+/// `pica`/`picas`, `%`) after a number or term, converted to pixels. `dpi` is pixels per inch
+/// (non-positive or non-finite values use 72). `%` is of `extent` (a field's range span, or 0).
+/// Unitless arithmetic still works: `1280*2`, `10px+1cm`, `50%`.
+pub fn parse_num_in(text: &str, dpi: f64, extent: f64) -> Option<f64> {
+    let dpi = if dpi.is_finite() && dpi > 0.0 { dpi } else { 72.0 };
+    let extent = if extent.is_finite() { extent } else { 0.0 };
+    eval(text, Some((dpi, extent)))
+}
+
+fn eval(text: &str, units: Option<(f64, f64)>) -> Option<f64> {
     let s = clean(text);
-    s.parse().ok().or_else(|| sum(&s)).filter(|v: &f64| v.is_finite())
+    s.parse().ok().or_else(|| sum(&s, units)).filter(|v: &f64| v.is_finite())
 }
 
 /// A plain typed number, no arithmetic.
@@ -1014,26 +1122,66 @@ fn clean(text: &str) -> String {
     text.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '−' { '-' } else { c }).collect()
 }
 
+fn is_length_unit(unit: &str) -> bool {
+    matches!(unit, "px" | "in" | "inch" | "inches" | "cm" | "mm" | "pt" | "pts" | "points" | "pica" | "picas" | "%")
+}
+
+/// Longest-first so `inches` wins over `in`, `points` over `pt`, `picas` over `pica`.
+const UNIT_SUFFIXES: &[&str] = &["inches", "points", "picas", "inch", "pica", "pts", "px", "pt", "cm", "mm", "in", "%"];
+
+fn split_unit(s: &str) -> (&str, &str) {
+    for suf in UNIT_SUFFIXES {
+        if let Some(num) = s.strip_suffix(suf)
+            && !num.is_empty()
+            && num.parse::<f64>().is_ok()
+        {
+            return (num, suf);
+        }
+    }
+    (s, "")
+}
+
+fn factor(s: &str, units: Option<(f64, f64)>) -> Option<f64> {
+    let lower = s.to_ascii_lowercase();
+    let (num, unit) = split_unit(&lower);
+    let n: f64 = num.parse().ok()?;
+    if unit.is_empty() {
+        return Some(n);
+    }
+    let (dpi, extent) = units?;
+    Some(match unit {
+        "px" => n,
+        "in" | "inch" | "inches" => n * dpi,
+        "cm" => n * dpi / 2.54,
+        "mm" => n * dpi / 25.4,
+        "pt" | "pts" | "points" => n * dpi / 72.0,
+        "pica" | "picas" => n * 12.0 * dpi / 72.0,
+        "%" => n / 100.0 * extent,
+        _ => return None,
+    })
+}
+
 /// `a+b-c…`: a `+` or `-` right after an operand splits terms; anywhere else it is a sign.
-fn sum(s: &str) -> Option<f64> {
+fn sum(s: &str, units: Option<(f64, f64)>) -> Option<f64> {
     let (mut total, mut sign, mut start, mut prev) = (0.0, 1.0, 0, ' ');
     for (i, c) in s.char_indices() {
         if matches!(c, '+' | '-') && i > start && !matches!(prev, '*' | '/' | 'e' | 'E') {
-            total += sign * product(s.get(start..i)?)?;
+            total += sign * product(s.get(start..i)?, units)?;
             sign = if c == '-' { -1.0 } else { 1.0 };
             start = i + 1;
         }
         prev = c;
     }
-    Some(total + sign * product(s.get(start..)?)?)
+    Some(total + sign * product(s.get(start..)?, units)?)
 }
 
 /// `a*b/c…`, left to right.
-fn product(s: &str) -> Option<f64> {
-    let mut factors = s.split(['*', '/']).map(str::parse::<f64>);
-    let mut acc = factors.next()?.ok()?;
-    for (op, x) in s.matches(['*', '/']).zip(factors) {
-        acc = if op == "*" { acc * x.ok()? } else { acc / x.ok()? };
+fn product(s: &str, units: Option<(f64, f64)>) -> Option<f64> {
+    let mut parts = s.split(['*', '/']);
+    let mut acc = factor(parts.next()?, units)?;
+    for (op, part) in s.matches(['*', '/']).zip(parts) {
+        let x = factor(part, units)?;
+        acc = if op == "*" { acc * x } else { acc / x };
     }
     Some(acc)
 }
@@ -1042,6 +1190,16 @@ fn product(s: &str) -> Option<f64> {
 mod tests {
     use egui::{Key, Modifiers};
     use egui_kittest::{Harness, kittest::Queryable};
+
+    #[test]
+    fn step_cyclic_wraps() {
+        let opts = [(0, "a"), (1, "b"), (2, "c")];
+        assert_eq!(super::step_cyclic(&0, &opts, 1), Some(1));
+        assert_eq!(super::step_cyclic(&2, &opts, 1), Some(0));
+        assert_eq!(super::step_cyclic(&0, &opts, -1), Some(2));
+        assert_eq!(super::step_cyclic(&1, &opts, 0), None);
+        assert_eq!(super::step_cyclic(&1, &[] as &[(i32, &str)], 1), None);
+    }
 
     /// Sets up a test with one value field. Its state is its value and how many times it changed.
     fn field(value: f32, range: std::ops::RangeInclusive<f32>) -> Harness<'static, (f32, u32)> {
@@ -1197,9 +1355,27 @@ mod tests {
         ] {
             assert_eq!(parse_num(text), Some(want), "{text}");
         }
-        for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3)", "1e400"] {
+        for text in ["", "abc", "5+", "*2", "4/0", "0/0", "1+*2", "(2+3)", "1e400", "2in"] {
             assert_eq!(parse_num(text), None, "{text}");
         }
+    }
+
+    #[test]
+    fn parse_num_in_converts_units() {
+        use super::parse_num_in;
+        assert_eq!(super::parse_num("1280*2"), Some(2560.0));
+        assert_eq!(parse_num_in("1280*2", 72.0, 0.0), Some(2560.0));
+        assert_eq!(parse_num_in("2in", 72.0, 0.0), Some(144.0));
+        assert_eq!(parse_num_in("2 inch", 72.0, 0.0), Some(144.0));
+        assert_eq!(parse_num_in("2inches", 72.0, 0.0), Some(144.0));
+        assert_eq!(parse_num_in("1cm+10px", 72.0, 0.0), Some(72.0 / 2.54 + 10.0));
+        assert_eq!(parse_num_in("10px+1cm", 72.0, 0.0), Some(10.0 + 72.0 / 2.54));
+        assert_eq!(parse_num_in("50%", 72.0, 200.0), Some(100.0));
+        assert_eq!(parse_num_in("1pica", 72.0, 0.0), Some(12.0));
+        assert_eq!(parse_num_in("72pt", 72.0, 0.0), Some(72.0));
+        assert_eq!(parse_num_in("25.4mm", 72.0, 0.0), Some(72.0));
+        assert_eq!(parse_num_in("2IN", 0.0, 0.0), Some(144.0), "non-positive dpi defaults to 72");
+        assert_eq!(parse_num_in("2foo", 72.0, 0.0), None);
     }
 
     /// Types `text` into a value field holding `start`, then presses `key`. Returns the value an OK
@@ -1263,6 +1439,97 @@ mod tests {
         // `5/2` alone would round to 3 under the caller; the whole expression still applies.
         assert_eq!(type_and_press(1.0, "5/2*2", Tab, true), 5.0);
         assert_eq!(type_and_press(1.0, "1280/3*2", Enter, true), 853.0);
+        assert_eq!(type_and_press(0.0, "2in", Tab, false), 144.0);
+        assert_eq!(type_and_press(0.0, "10px+1cm", Enter, false), (10.0 + 72.0 / 2.54) as f32);
+    }
+
+    #[test]
+    fn value_field_percent_suffix_uses_range_span() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+            |ui, v: &mut f32| {
+                super::value_field(ui, v, 0.0..=100.0, "%", 90.0);
+            },
+            0.0,
+        );
+        h.get_by_role(egui::accesskit::Role::SpinButton).click();
+        h.run();
+        for c in "50%".chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        h.key_press(egui::Key::Tab);
+        h.run();
+        assert_eq!(*h.state(), 50.0);
+    }
+
+    fn slider_row_harness(value: f32, g: super::RowGestures) -> Harness<'static, f32> {
+        let mut h = Harness::builder().with_size(egui::vec2(400.0, 100.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            move |ui, v: &mut f32| {
+                super::slider_row_with(ui, "Amount", v, 0.0..=100.0, "px", None, g);
+            },
+            value,
+        );
+        h.run();
+        h
+    }
+
+    fn click_at(h: &mut Harness<'static, f32>, p: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(p));
+        h.run();
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE });
+            h.run();
+        }
+    }
+
+    fn double_click_at(h: &mut Harness<'static, f32>, p: egui::Pos2) {
+        click_at(h, p);
+        click_at(h, p);
+    }
+
+    #[test]
+    fn slider_row_with_reset_works_on_slider_and_label() {
+        use egui_kittest::kittest::Queryable;
+        let g = super::RowGestures { reset: Some(25.0), wheel_step: None };
+        let mut h = slider_row_harness(80.0, g);
+        let label = h.get_by_label("Amount").rect();
+        let track = egui::pos2(label.left() + 80.0, label.bottom() + 12.0);
+        double_click_at(&mut h, track);
+        assert_eq!(*h.state(), 25.0, "double-click on the slider");
+        *h.state_mut() = 80.0;
+        h.run();
+        let label = h.get_by_label("Amount").rect();
+        double_click_at(&mut h, label.center());
+        assert_eq!(*h.state(), 25.0, "double-click on the label");
+    }
+
+    #[test]
+    fn slider_row_label_double_click_without_reset_does_not_change() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = slider_row_harness(80.0, super::RowGestures::default());
+        let label = h.get_by_label("Amount").rect();
+        double_click_at(&mut h, label.center());
+        assert_eq!(*h.state(), 80.0);
+    }
+
+    #[test]
+    fn slider_row_label_scrubs_the_value() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = slider_row_harness(50.0, super::RowGestures::default());
+        let from = h.get_by_label("Amount").rect().center();
+        let to = from + egui::vec2(80.0, 0.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.run();
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grab);
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run();
+        h.event(egui::Event::PointerMoved(to));
+        h.run();
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Grabbing);
+        assert!(*h.state() > 50.0, "dragging the label right increases the value, got {}", h.state());
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run();
     }
 
     #[test]

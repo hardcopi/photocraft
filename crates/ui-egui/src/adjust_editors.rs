@@ -351,16 +351,57 @@ fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let chan = chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" });
     let key = curve_key(&chan);
     let mut pts = read_curve(v, key);
+    let mut e = Edit::default();
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        if crate::icons::button(ui, "pencil", 24.0, st.pencil, tl!("Pencil: draw the curve freehand")).clicked() {
+            st.pencil = !st.pencil;
+            st.gesture = Default::default();
+        }
+        if crate::icons::button(ui, "spline", 24.0, false, tl!("Smooth the curve")).clicked() {
+            pts = curve_edit::smooth_curve(&pts);
+            st.gesture.selected = None;
+            changed = true;
+            e.commit = true;
+        }
+    });
     let side = ui.available_width().clamp(120.0, 300.0);
     ui.add_space(4.0);
     let (full, resp) = ui.allocate_exact_size(vec2(side, side + 14.0), Sense::click_and_drag());
     let graph = curve_graph(full, side);
     ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-graph"), graph));
     let to_scr = |q: [f32; 2]| pos2(graph.left() + q[0] / 255.0 * graph.width(), graph.bottom() - q[1] / 255.0 * graph.height());
-    let mut e = Edit::default();
-    let interaction = crate::point_curve::interact(ui, &resp, graph, &mut pts, &mut st.gesture);
-    let mut changed = interaction.changed;
-    e.commit = interaction.commit;
+    let to_val =
+        |s: Pos2| [((s.x - graph.left()) / graph.width() * 255.0).clamp(0.0, 255.0), ((graph.bottom() - s.y) / graph.height() * 255.0).clamp(0.0, 255.0)];
+    let stroke_id = cx.mem.with("curves-pencil-stroke");
+    if st.pencil {
+        let mut stroke: Vec<[f32; 2]> = ui.data(|d| d.get_temp(stroke_id)).unwrap_or_default();
+        if (resp.dragged() || resp.clicked())
+            && let Some(p) = resp.interact_pointer_pos()
+        {
+            if ui.input(|i| i.pointer.primary_pressed()) {
+                stroke.clear();
+            }
+            stroke.push(to_val(p));
+            pts = curve_edit::resample_pencil(&stroke, curve_edit::MAX_POINTS);
+            changed = true;
+        }
+        if resp.drag_stopped() || (resp.clicked() && !resp.dragged()) {
+            if !stroke.is_empty() {
+                pts = curve_edit::resample_pencil(&stroke, curve_edit::MAX_POINTS);
+                changed = true;
+                e.commit = true;
+            }
+            stroke.clear();
+        }
+        ui.data_mut(|d| d.insert_temp(stroke_id, stroke));
+        st.gesture = Default::default();
+    } else {
+        ui.data_mut(|d| d.remove::<Vec<[f32; 2]>>(stroke_id));
+        let interaction = crate::point_curve::interact(ui, &resp, graph, &mut pts, &mut st.gesture);
+        changed |= interaction.changed;
+        e.commit |= interaction.commit;
+    }
 
     // Draw: histogram, quarter grid, baseline, gradient bars, other channels, the curve, points.
     let p = ui.painter_at(full.expand(2.0));

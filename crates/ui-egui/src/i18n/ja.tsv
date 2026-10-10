@@ -1940,6 +1940,8 @@
 	Import Brushes… (.abr)	ブラシを読み込み…(.abr)
 	Move Group Down	グループを下へ移動
 	Move Group Up	グループを上へ移動
+	Dock Group	グループをドッキング
+	Float Group	グループをフローティング
 	Reset the brush to the defaults	ブラシを既定に戻す
 	Restore original size	元のサイズに戻す
 	Roundness:	真円率:
@@ -3306,3 +3308,17 @@ fontWeight	Italic	斜体
 	Color to Alpha…	カラーを透明に…
 	Transparency Threshold	透明のしきい値
 	Opacity Threshold	不透明度のしきい値
+	Move Up	上へ
+	Move Down	下へ
+	Save Set…	セットを保存…
+	Soft Dark Theme	ソフトダークテーマ
+	Soft Light Theme	ソフトライトテーマ
+	Soft dark	ソフトダーク
+	Soft light	ソフトライト
+	Filter by name	名前で絞り込み
+	Pencil: draw the curve freehand	鉛筆：曲線をフリーハンドで描く
+	Smooth the curve	曲線を滑らかにする
+	115%	115%
+	Recent document sizes	最近のドキュメントサイズ
+	Show canvas pattern	キャンバスのパターンを表示
+	Show rulers in new documents	新規ドキュメントで定規を表示

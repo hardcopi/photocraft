@@ -317,6 +317,7 @@ mod tests {
         let mut a = app();
         a.ui.tool = Tool::Brush;
         a.sync_views();
+        a.ui.extras.rulers = false;
         let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
             |ui, app: &mut PhotocraftApp| {
                 let ctx = ui.ctx().clone();

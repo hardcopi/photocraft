@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, blend_from_str, int, layer_param};
+use crate::presets::{Group, Named};
 use crate::{EngineError, Result, Session};
 
 // ------------------------------------------------------------------ state
@@ -800,15 +801,70 @@ fn find_replace(s: &mut Session, p: &Value) -> Result<Value> {
 // ------------------------------------------------------------------ presets
 
 /// Libraries the Preset Manager edits (patterns export as `.pat` with `pattern.export`).
-const PRESET_KINDS: [&str; 3] = ["brushes", "customShapes", "patterns"];
+const PRESET_KINDS: [&str; 6] = ["brushes", "customShapes", "patterns", "gradients", "swatches", "styles"];
 
-fn preset_names(s: &Session, kind: &str) -> Option<Vec<String>> {
+fn canonical_kind(kind: &str) -> Option<&'static str> {
     Some(match kind {
-        "brushes" => s.tools.presets.iter().map(|b| b.name.clone()).collect(),
-        "customShapes" => s.edit_state.custom_shapes.iter().map(|c| c.name.clone()).collect(),
-        "patterns" => s.patterns.items.iter().map(|p| p.name.clone()).collect(),
+        "brushes" => "brushes",
+        "customShapes" | "shapes" => "customShapes",
+        "patterns" => "patterns",
+        "gradients" => "gradients",
+        "swatches" | "colors" => "swatches",
+        "styles" => "styles",
         _ => return None,
     })
+}
+
+#[derive(Clone, Debug)]
+struct PresetEntry {
+    name: String,
+    group: String,
+}
+
+impl PresetEntry {
+    fn json(&self) -> Value {
+        if self.group.is_empty() {
+            json!({"name": self.name})
+        } else {
+            json!({"name": self.name, "group": self.group})
+        }
+    }
+}
+
+fn grouped_entries<T: Named>(groups: &[Group<T>]) -> Vec<PresetEntry> {
+    groups
+        .iter()
+        .flat_map(|g| g.items.iter().map(|i| PresetEntry { name: i.name().to_string(), group: g.name.clone() }))
+        .collect()
+}
+
+fn preset_entries(s: &Session, kind: &str) -> Option<Vec<PresetEntry>> {
+    Some(match canonical_kind(kind)? {
+        "brushes" => s
+            .tools
+            .presets
+            .iter()
+            .map(|b| PresetEntry { name: b.name.clone(), group: b.group.clone() })
+            .collect(),
+        "customShapes" => s.edit_state.custom_shapes.iter().map(|c| PresetEntry { name: c.name.clone(), group: String::new() }).collect(),
+        "patterns" => s.patterns.items.iter().map(|p| PresetEntry { name: p.name.clone(), group: String::new() }).collect(),
+        "gradients" => grouped_entries(&s.presets.gradients),
+        "swatches" => grouped_entries(&s.presets.swatches),
+        "styles" => grouped_entries(&s.presets.styles),
+        _ => return None,
+    })
+}
+
+fn preset_names(s: &Session, kind: &str) -> Option<Vec<String>> {
+    Some(preset_entries(s, kind)?.into_iter().map(|e| e.name).collect())
+}
+
+fn filter_query(entries: Vec<PresetEntry>, query: &str) -> Vec<PresetEntry> {
+    let q = query.trim().to_ascii_lowercase();
+    if q.is_empty() {
+        return entries;
+    }
+    entries.into_iter().filter(|e| e.name.to_ascii_lowercase().contains(&q) || e.group.to_ascii_lowercase().contains(&q)).collect()
 }
 
 fn preset_index(s: &Session, kind: &str, p: &Value) -> Result<usize> {
@@ -820,56 +876,304 @@ fn preset_index(s: &Session, kind: &str, p: &Value) -> Result<usize> {
     names.iter().position(|n| n == name).ok_or_else(|| bad("edit.presets.presetManager", format!("no preset named `{name}`")))
 }
 
+fn rename_grouped<T: Named>(groups: &mut [Group<T>], i: usize, new: String) -> bool {
+    let mut n = 0;
+    for g in groups {
+        for item in &mut g.items {
+            if n == i {
+                item.set_name(new);
+                return true;
+            }
+            n += 1;
+        }
+    }
+    false
+}
+
+fn delete_grouped<T>(groups: &mut [Group<T>], i: usize) -> bool {
+    let mut n = 0;
+    for g in groups.iter_mut() {
+        for j in 0..g.items.len() {
+            if n == i {
+                g.items.remove(j);
+                return true;
+            }
+            n += 1;
+        }
+    }
+    false
+}
+
+fn move_grouped<T: Clone>(groups: &mut Vec<Group<T>>, i: usize, to: usize) -> bool {
+    let mut items: Vec<(String, T)> = groups.iter().flat_map(|g| g.items.iter().cloned().map(|item| (g.name.clone(), item))).collect();
+    if crate::move_item(&mut items, i, to).is_none() {
+        return false;
+    }
+    let mut rebuilt: Vec<Group<T>> = Vec::new();
+    for (name, item) in items {
+        match rebuilt.iter_mut().find(|g| g.name == name) {
+            Some(g) => g.items.push(item),
+            None => rebuilt.push(Group::new(&name, vec![item])),
+        }
+    }
+    *groups = rebuilt;
+    true
+}
+
+fn list_json(s: &Session, kind: &str, query: &str) -> Result<Value> {
+    let entries = preset_entries(s, kind).ok_or_else(|| bad("edit.presets.presetManager", format!("unknown preset kind `{kind}`")))?;
+    Ok(Value::Array(filter_query(entries, query).into_iter().map(|e| e.json()).collect()))
+}
+
+const PRESET_SET_FORMAT: &str = "photocraft-preset-set";
+
+fn dump_set(s: &Session, kind: &str) -> Result<Value> {
+    let cmd = "edit.presets.presetManager";
+    let items = match kind {
+        "brushes" => serde_json::to_value(&s.tools.presets).map_err(|e| bad(cmd, e.to_string()))?,
+        "customShapes" => serde_json::to_value(&s.edit_state.custom_shapes).map_err(|e| bad(cmd, e.to_string()))?,
+        "gradients" => dump_grouped(&s.presets.gradients),
+        "swatches" => dump_grouped(&s.presets.swatches),
+        "styles" => dump_grouped(&s.presets.styles),
+        "patterns" => {
+            let bytes = photocraft_io::pattern_map::write_pat(&s.patterns.items).map_err(EngineError::Other)?;
+            return Ok(json!({
+                "format": PRESET_SET_FORMAT,
+                "version": 1,
+                "kind": kind,
+                "pat": photocraft_paint::tile::b64_encode(&bytes),
+                "items": list_json(s, kind, "")?,
+            }));
+        }
+        _ => Value::Null,
+    };
+    Ok(json!({"format": PRESET_SET_FORMAT, "version": 1, "kind": kind, "items": items}))
+}
+
+fn dump_grouped<T: Serialize>(groups: &[Group<T>]) -> Value {
+    let mut items = Vec::new();
+    for g in groups {
+        for item in &g.items {
+            items.push(json!({"group": g.name, "preset": item}));
+        }
+    }
+    Value::Array(items)
+}
+
+fn load_set(s: &mut Session, kind: &str, p: &Value) -> Result<Value> {
+    let cmd = "edit.presets.presetManager";
+    if let Some(b64) = p.get("bytes").and_then(Value::as_str) {
+        return load_native_bytes(s, kind, b64, p.get("fileName").and_then(Value::as_str).unwrap_or(""));
+    }
+    let data = p.get("data").cloned().ok_or_else(|| bad(cmd, "missing `data` (a dumped preset set) or `bytes`"))?;
+    let data = match data {
+        Value::String(text) => serde_json::from_str(&text).map_err(|e| bad(cmd, format!("not a preset set: {e}")))?,
+        v => v,
+    };
+    if data.get("format").and_then(Value::as_str) != Some(PRESET_SET_FORMAT) {
+        return Err(bad(cmd, "not a PhotoCraft preset set (Save Set… from the Preset Manager)"));
+    }
+    let file_kind = data.get("kind").and_then(Value::as_str).unwrap_or("");
+    if canonical_kind(file_kind) != Some(kind) {
+        return Err(bad(cmd, format!("set is `{file_kind}`, expected `{kind}`")));
+    }
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
+    let n = match kind {
+        "brushes" => {
+            let items: Vec<photocraft_paint::BrushPreset> =
+                serde_json::from_value(data.get("items").cloned().unwrap_or(Value::Null)).map_err(|e| bad(cmd, format!("brushes: {e}")))?;
+            if replace {
+                s.tools.presets.clear();
+            }
+            merge_named(&mut s.tools.presets, items, |b| b.name.clone())
+        }
+        "customShapes" => {
+            let items: Vec<CustomShape> =
+                serde_json::from_value(data.get("items").cloned().unwrap_or(Value::Null)).map_err(|e| bad(cmd, format!("customShapes: {e}")))?;
+            if replace {
+                s.edit_state.custom_shapes.clear();
+            }
+            merge_named(&mut s.edit_state.custom_shapes, items, |c| c.name.clone())
+        }
+        "gradients" => merge_grouped_presets(&mut s.presets.gradients, &data, replace, cmd)?,
+        "swatches" => merge_grouped_presets(&mut s.presets.swatches, &data, replace, cmd)?,
+        "styles" => merge_grouped_presets(&mut s.presets.styles, &data, replace, cmd)?,
+        "patterns" => load_patterns(s, &data, replace, cmd)?,
+        _ => 0,
+    };
+    match kind {
+        "brushes" => s.brush_presets_changed(),
+        "gradients" | "swatches" | "styles" => s.presets_changed(),
+        _ => {}
+    }
+    Ok(json!({"kind": kind, "loaded": n, kind: list_json(s, kind, "")?}))
+}
+
+fn merge_named<T>(dst: &mut Vec<T>, incoming: Vec<T>, name: impl Fn(&T) -> String) -> usize {
+    let n = incoming.len();
+    for item in incoming {
+        let nme = name(&item);
+        match dst.iter_mut().position(|x| name(x) == nme) {
+            Some(i) => dst[i] = item,
+            None => dst.push(item),
+        }
+    }
+    n
+}
+
+fn grouped_from_items<T: serde::de::DeserializeOwned>(data: &Value, cmd: &str) -> Result<Vec<(String, T)>> {
+    let arr = data.get("items").and_then(Value::as_array).ok_or_else(|| bad(cmd, "set has no items"))?;
+    let mut out = Vec::new();
+    for it in arr {
+        let group = it.get("group").and_then(Value::as_str).unwrap_or("").to_string();
+        let preset = it.get("preset").cloned().ok_or_else(|| bad(cmd, "each item needs `preset` (re-save the set from the Preset Manager)"))?;
+        let item: T = serde_json::from_value(preset).map_err(|e| bad(cmd, e.to_string()))?;
+        out.push((group, item));
+    }
+    Ok(out)
+}
+
+fn merge_grouped_presets<T: Named + serde::de::DeserializeOwned>(groups: &mut Vec<Group<T>>, data: &Value, replace: bool, cmd: &str) -> Result<usize> {
+    let incoming = grouped_from_items::<T>(data, cmd)?;
+    if replace {
+        groups.clear();
+    }
+    let n = incoming.len();
+    for (group, item) in incoming {
+        let name = item.name().to_string();
+        if let Some(x) = groups.iter_mut().flat_map(|g| g.items.iter_mut()).find(|i| i.name() == name) {
+            *x = item;
+            continue;
+        }
+        match groups.iter_mut().find(|g| g.name == group) {
+            Some(g) => g.items.push(item),
+            None => groups.push(Group::new(&group, vec![item])),
+        }
+    }
+    Ok(n)
+}
+
+fn load_patterns(s: &mut Session, data: &Value, replace: bool, cmd: &str) -> Result<usize> {
+    let b64 = data.get("pat").and_then(Value::as_str).ok_or_else(|| bad(cmd, "pattern set is missing `pat` (re-save from the Preset Manager)"))?;
+    let bytes = photocraft_paint::tile::b64_decode(b64).ok_or_else(|| bad(cmd, "`pat` is not valid base64"))?;
+    let pats = photocraft_io::pattern_map::read_pat(&bytes).map_err(|e| bad(cmd, e))?;
+    if replace {
+        s.patterns.items.clear();
+    }
+    let n = pats.len();
+    for pat in pats {
+        match s.patterns.items.iter_mut().find(|q| q.id == pat.id || q.name == pat.name) {
+            Some(q) => *q = pat,
+            None => s.patterns.items.push(pat),
+        }
+    }
+    Ok(n)
+}
+
+fn load_native_bytes(s: &mut Session, kind: &str, b64: &str, file_name: &str) -> Result<Value> {
+    let cmd = "edit.presets.presetManager";
+    let bytes = photocraft_paint::tile::b64_decode(b64).ok_or_else(|| bad(cmd, "`bytes` is not valid base64"))?;
+    let data = photocraft_paint::tile::b64_encode(&bytes);
+    match kind {
+        "brushes" => s.execute("brush.presets.importAbr", json!({"data": data, "group": stem(file_name)})),
+        "gradients" => s.execute("gradient.presets.importGrd", json!({"data": data, "group": stem(file_name)})),
+        "swatches" => s.execute("swatches.import", json!({"data": data, "group": stem(file_name)})),
+        "patterns" => {
+            let pats = photocraft_io::pattern_map::read_pat(&bytes).map_err(|e| bad(cmd, e))?;
+            let n = pats.len();
+            for pat in pats {
+                match s.patterns.items.iter_mut().find(|q| q.id == pat.id || q.name == pat.name) {
+                    Some(q) => *q = pat,
+                    None => s.patterns.items.push(pat),
+                }
+            }
+            Ok(json!({"kind": kind, "loaded": n, kind: list_json(s, kind, "")?}))
+        }
+        _ => Err(bad(cmd, format!("`{kind}` loads a PhotoCraft preset set (Save Set…), not this file"))),
+    }
+}
+
+fn stem(name: &str) -> String {
+    std::path::Path::new(name).file_stem().map(|s| s.to_string_lossy().into_owned()).filter(|s| !s.is_empty()).unwrap_or_else(|| "Imported".into())
+}
+
 fn preset_manager(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "edit.presets.presetManager";
     let action = str_or(p, "action", "list");
+    let query = p.get("query").and_then(Value::as_str).unwrap_or("");
     if action == "list" {
-        let kinds: Vec<&str> = match p.get("kind").and_then(Value::as_str) {
-            Some(k) => vec![k],
-            None => PRESET_KINDS.to_vec(),
+        let kinds: Vec<String> = match p.get("kind").and_then(Value::as_str) {
+            Some(k) => vec![canonical_kind(k).unwrap_or(k).to_string()],
+            None => PRESET_KINDS.iter().map(|k| (*k).to_string()).collect(),
         };
         let mut out = serde_json::Map::new();
         for k in kinds {
-            out.insert(k.to_string(), json!(preset_names(s, k).ok_or_else(|| bad(cmd, format!("unknown preset kind `{k}`")))?));
+            out.insert(k.clone(), list_json(s, &k, query)?);
         }
         return Ok(Value::Object(out));
     }
-    let kind = p.get("kind").and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing `kind`"))?.to_string();
-    let i = preset_index(s, &kind, p)?;
+    let raw_kind = p.get("kind").and_then(Value::as_str).ok_or_else(|| bad(cmd, "missing `kind`"))?;
+    let kind = canonical_kind(raw_kind).ok_or_else(|| bad(cmd, format!("unknown preset kind `{raw_kind}` ({})", PRESET_KINDS.join("|"))))?;
+    if action == "save" {
+        let set = dump_set(s, kind)?;
+        if let Some(path) = p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()) {
+            let bytes = serde_json::to_vec_pretty(&set).map_err(|e| bad(cmd, e.to_string()))?;
+            crate::file_cmds::write_file(path, &bytes)?;
+            return Ok(json!({"kind": kind, "path": path, "items": set.get("items").cloned().unwrap_or(Value::Null)}));
+        }
+        return Ok(set);
+    }
+    if action == "load" {
+        return load_set(s, kind, p);
+    }
+    let i = preset_index(s, kind, p)?;
     match action {
         "rename" => {
             let new =
                 p.get("newName").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(cmd, "missing `newName`"))?.to_string();
-            match kind.as_str() {
+            match kind {
                 "brushes" => {
-                    // A renamed built-in is the user's preset now (and persists as one).
                     let b = &mut s.tools.presets[i];
                     b.name = new;
                     b.builtin = false;
                 }
                 "patterns" => s.patterns.items[i].name = new,
-                _ => s.edit_state.custom_shapes[i].name = new,
+                "customShapes" => s.edit_state.custom_shapes[i].name = new,
+                "gradients" => drop(rename_grouped(&mut s.presets.gradients, i, new)),
+                "swatches" => drop(rename_grouped(&mut s.presets.swatches, i, new)),
+                "styles" => drop(rename_grouped(&mut s.presets.styles, i, new)),
+                _ => {}
             }
         }
-        "delete" => match kind.as_str() {
+        "delete" => match kind {
             "brushes" => drop(s.tools.presets.remove(i)),
             "patterns" => drop(s.patterns.items.remove(i)),
-            _ => drop(s.edit_state.custom_shapes.remove(i)),
+            "customShapes" => drop(s.edit_state.custom_shapes.remove(i)),
+            "gradients" => drop(delete_grouped(&mut s.presets.gradients, i)),
+            "swatches" => drop(delete_grouped(&mut s.presets.swatches, i)),
+            "styles" => drop(delete_grouped(&mut s.presets.styles, i)),
+            _ => {}
         },
         "move" => {
             let to = p.get("to").and_then(Value::as_u64).ok_or_else(|| bad(cmd, "missing `to`"))? as usize;
-            match kind.as_str() {
-                "brushes" => crate::move_item(&mut s.tools.presets, i, to),
-                "patterns" => crate::move_item(&mut s.patterns.items, i, to),
-                _ => crate::move_item(&mut s.edit_state.custom_shapes, i, to),
+            match kind {
+                "brushes" => drop(crate::move_item(&mut s.tools.presets, i, to)),
+                "patterns" => drop(crate::move_item(&mut s.patterns.items, i, to)),
+                "customShapes" => drop(crate::move_item(&mut s.edit_state.custom_shapes, i, to)),
+                "gradients" => drop(move_grouped(&mut s.presets.gradients, i, to)),
+                "swatches" => drop(move_grouped(&mut s.presets.swatches, i, to)),
+                "styles" => drop(move_grouped(&mut s.presets.styles, i, to)),
+                _ => {}
             };
         }
-        other => return Err(bad(cmd, format!("unknown action `{other}` (list|rename|delete|move)"))),
+        other => return Err(bad(cmd, format!("unknown action `{other}` (list|rename|delete|move|save|load)"))),
     }
-    if kind == "brushes" {
-        s.brush_presets_changed();
+    match kind {
+        "brushes" => s.brush_presets_changed(),
+        "gradients" | "swatches" | "styles" => s.presets_changed(),
+        _ => {}
     }
-    Ok(json!({kind.clone(): preset_names(s, &kind)}))
+    Ok(json!({kind: list_json(s, kind, "")?}))
 }
 
 /// Exported preset file (`.pcpresets`, JSON).
@@ -1019,7 +1323,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Preset Manager…",
             ["Edit", "Presets"],
             None,
-            r##"{"action":"list|rename|delete|move","kind":"brushes|customShapes|patterns","index":n?,"name":str?,"newName":str?,"to":n?}"##,
+            r##"{"action":"list|rename|delete|move|save|load","kind":"brushes|customShapes|patterns|gradients|swatches|styles","index":n?,"name":str?,"newName":str?,"to":n?,"query":str?,"data":json (load),"bytes":base64 (load native file),"fileName":str?,"path":file (save),"replace":bool=false}"##,
             always,
             preset_manager
         ),
