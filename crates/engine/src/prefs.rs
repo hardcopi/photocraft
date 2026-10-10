@@ -55,7 +55,10 @@ choice!(TypeUnit { Points = "points", Pixels = "pixels", Millimeters = "mm" } de
 choice!(PointSize { PostScript = "postScript", Traditional = "traditional" } default PostScript);
 choice!(Interpolation { BicubicAutomatic = "bicubicAutomatic", Nearest = "nearestNeighbor", Bilinear = "bilinear", Bicubic = "bicubic", BicubicSmoother = "bicubicSmoother", BicubicSharper = "bicubicSharper", PreserveDetails = "preserveDetails" } default BicubicAutomatic);
 choice!(ColorPicker { Adobe = "adobe", System = "system" } default Adobe);
-choice!(Theme { Pro = "pro", ProMedium = "proMedium", SoftDark = "softDark", Studio = "studio", StudioLight = "studioLight", SoftLight = "softLight", Classic = "classic" } default ProMedium);
+choice!(Theme { Pro = "pro", ProMedium = "proMedium", SoftDark = "softDark", Studio = "studio", StudioLight = "studioLight", SoftLight = "softLight", Classic = "classic", SolarizedDark = "solarizedDark", Adwaita = "adwaita", AdwaitaDark = "adwaitaDark" } default ProMedium);
+choice!(AppearanceMode { Auto = "auto", Dark = "dark", Light = "light" } default Dark);
+choice!(DarkTheme { Pro = "pro", ProMedium = "proMedium", SoftDark = "softDark", Studio = "studio", SolarizedDark = "solarizedDark", AdwaitaDark = "adwaitaDark" } default ProMedium);
+choice!(LightTheme { StudioLight = "studioLight", SoftLight = "softLight", Classic = "classic", Adwaita = "adwaita" } default StudioLight);
 choice!(CanvasColor { Default = "default", Black = "black", DarkGray = "darkGray", MediumGray = "mediumGray", LightGray = "lightGray", Custom = "custom" } default Default);
 choice!(CanvasBorder { DropShadow = "dropShadow", Line = "line", None = "none" } default DropShadow);
 choice!(UiScale { Auto = "auto", P75 = "75", P100 = "100", P115 = "115", P125 = "125", P150 = "150", P175 = "175", P200 = "200", P250 = "250", P300 = "300" } default Auto);
@@ -207,7 +210,11 @@ impl Default for General {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Interface {
+    /// Legacy single-theme preference, retained for old automation and saved settings.
     pub theme: Theme,
+    pub appearance_mode: AppearanceMode,
+    pub dark_theme: DarkTheme,
+    pub light_theme: LightTheme,
     /// Pasteboard colour in standard screen mode (`canvasCustomColor` when "custom").
     pub canvas_color: CanvasColor,
     pub canvas_custom_color: String,
@@ -233,12 +240,20 @@ pub struct Interface {
     /// own one-row title bar (tiling window managers, desktops that draw their own decorations;
     /// #1271, #1316). Read when the app starts. macOS always uses the system's.
     pub system_title_bar: bool,
+    /// Notices (the lower-right cards) hide themselves after
+    /// [`Interface::notification_duration_seconds`] unless the pointer rests on them (#2022).
+    pub notification_auto_hide: bool,
+    /// Seconds a notice stays on screen before it hides itself (Auto Hide Notifications).
+    pub notification_duration_seconds: u32,
 }
 
 impl Default for Interface {
     fn default() -> Self {
         Self {
             theme: Theme::ProMedium,
+            appearance_mode: AppearanceMode::Dark,
+            dark_theme: DarkTheme::ProMedium,
+            light_theme: LightTheme::StudioLight,
             canvas_color: CanvasColor::Default,
             canvas_custom_color: "#282828".into(),
             canvas_border: CanvasBorder::DropShadow,
@@ -252,6 +267,8 @@ impl Default for Interface {
             show_canvas_pattern: true,
             show_bounding_box_when_dragging_layer: false,
             system_title_bar: false,
+            notification_auto_hide: true,
+            notification_duration_seconds: 6,
         }
     }
 }
@@ -875,11 +892,9 @@ pub const SECTIONS: [(&str, &str); 18] = [
 pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "general.colorPicker",
     "general.beepWhenDone",
-    "general.exportClipboard",
     "general.resizeImageDuringPlace",
     "general.alwaysCreateSmartObjectsWhenPlacing",
     "general.zoomResizesWindows",
-    "interface.showChannelsInColor",
     "interface.dynamicColorSliders",
     "workspace.autoCollapseIconPanels",
     "workspace.autoShowHiddenPanels",
@@ -909,7 +924,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "type.showFontNamesInEnglish",
     "type.textEngine",
     "type.fontPreview",
-    "type.fillNewTypeLayersWithPlaceholder",
     "enhancedControls.scrubbySliderAcceleration",
     "enhancedControls.touchGestures",
     "rawDefaults.colorSpace",
@@ -939,6 +953,9 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "general.colorPicker" => ColorPicker::NAMES,
         "general.imageInterpolation" => Interpolation::NAMES,
         "interface.theme" => Theme::NAMES,
+        "interface.appearanceMode" => AppearanceMode::NAMES,
+        "interface.darkTheme" => DarkTheme::NAMES,
+        "interface.lightTheme" => LightTheme::NAMES,
         "interface.canvasColor" => CanvasColor::NAMES,
         "interface.canvasBorder" => CanvasBorder::NAMES,
         "interface.uiScale" => UiScale::NAMES,
@@ -975,6 +992,7 @@ pub fn range(path: &str) -> Option<(f64, f64)> {
     Some(match path {
         "fileHandling.autosaveMinutes" => (1.0, 240.0),
         "fileHandling.recentFileCount" => (0.0, 100.0),
+        "interface.notificationDurationSeconds" => (1.0, 120.0),
         "export.jpegQuality" | "export.webpQuality" => (1.0, 100.0),
         "performance.memoryUsageMb" => (256.0, 1_048_576.0),
         "performance.historyStates" => (1.0, 1000.0),
@@ -1350,6 +1368,19 @@ impl Session {
     /// defaults and unknown keys are ignored, so files from older and newer versions load.
     pub fn load_prefs_json(&mut self, s: &str) -> std::result::Result<(), String> {
         let mut v: Value = serde_json::from_str(s).map_err(|e| format!("preferences: {e}"))?;
+        // Saved preferences before appearance modes had one concrete theme. Preserve its
+        // appearance instead of silently switching established users to Auto.
+        if let Some(interface) = v.get_mut("interface").and_then(Value::as_object_mut)
+            && !interface.contains_key("appearanceMode")
+            && let Some(theme) = interface.get("theme").and_then(Value::as_str).and_then(Theme::parse)
+        {
+            let (mode, slot) = match theme {
+                Theme::Pro | Theme::ProMedium | Theme::SoftDark | Theme::Studio | Theme::SolarizedDark | Theme::AdwaitaDark => ("dark", "darkTheme"),
+                Theme::StudioLight | Theme::SoftLight | Theme::Classic | Theme::Adwaita => ("light", "lightTheme"),
+            };
+            interface.insert("appearanceMode".into(), json!(mode));
+            interface.insert(slot.into(), json!(theme.name()));
+        }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
         let prefs: Preferences = serde_json::from_value(v).map_err(|e| format!("preferences: {e}"))?;
@@ -1409,6 +1440,52 @@ impl Session {
             }
         } else {
             next.set(path, value)?;
+        }
+        // Old `prefs.set interface.theme` clients (by path or inside a section object) still
+        // select a visible theme.
+        if path == "interface.theme" || next.interface.theme != self.prefs().interface.theme {
+            match next.interface.theme {
+                Theme::Pro => {
+                    next.interface.dark_theme = DarkTheme::Pro;
+                    next.interface.appearance_mode = AppearanceMode::Dark;
+                }
+                Theme::ProMedium => {
+                    next.interface.dark_theme = DarkTheme::ProMedium;
+                    next.interface.appearance_mode = AppearanceMode::Dark;
+                }
+                Theme::SoftDark => {
+                    next.interface.dark_theme = DarkTheme::SoftDark;
+                    next.interface.appearance_mode = AppearanceMode::Dark;
+                }
+                Theme::Studio => {
+                    next.interface.dark_theme = DarkTheme::Studio;
+                    next.interface.appearance_mode = AppearanceMode::Dark;
+                }
+                Theme::StudioLight => {
+                    next.interface.light_theme = LightTheme::StudioLight;
+                    next.interface.appearance_mode = AppearanceMode::Light;
+                }
+                Theme::SoftLight => {
+                    next.interface.light_theme = LightTheme::SoftLight;
+                    next.interface.appearance_mode = AppearanceMode::Light;
+                }
+                Theme::Classic => {
+                    next.interface.light_theme = LightTheme::Classic;
+                    next.interface.appearance_mode = AppearanceMode::Light;
+                }
+                Theme::Adwaita => {
+                    next.interface.light_theme = LightTheme::Adwaita;
+                    next.interface.appearance_mode = AppearanceMode::Light;
+                }
+                Theme::SolarizedDark => {
+                    next.interface.dark_theme = DarkTheme::SolarizedDark;
+                    next.interface.appearance_mode = AppearanceMode::Dark;
+                }
+                Theme::AdwaitaDark => {
+                    next.interface.dark_theme = DarkTheme::AdwaitaDark;
+                    next.interface.appearance_mode = AppearanceMode::Dark;
+                }
+            }
         }
         self.prefs.edit(|p| *p = next);
         Ok(())

@@ -80,7 +80,7 @@ id = "UI-217-11"
 target = "Soft dark and soft light themes with picker previews; outlined knobs in light themes"
 status = "done"
 issue = 217
-note = "ThemeKind SoftDark/SoftLight (7 total); title-bar picker shows chrome/accent/card swatches; light non-pro knobs get a field_border stroke in widgets.rs"
+note = "ThemeKind SoftDark/SoftLight plus Adwaita and Solarized; title-bar picker shows chrome/accent/card swatches; light non-pro knobs get a field_border stroke in widgets.rs"
 
 [[item]]
 id = "UI-217-12"

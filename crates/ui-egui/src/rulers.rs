@@ -180,7 +180,7 @@ pub fn guide_at(app: &PhotocraftApp, x: f64, y: f64) -> Option<(bool, usize)> {
         return None;
     }
     let doc = &app.session.active()?.doc;
-    let tol = 4.0 / app.current_zoom().max(0.01) as f64;
+    let tol = 4.0 / app.point_zoom().max(0.01) as f64;
     for (i, g) in doc.guides.vertical.iter().enumerate() {
         if (*g - x).abs() <= tol {
             return Some((true, i));

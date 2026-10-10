@@ -942,6 +942,7 @@ mod tests {
             // Recent lists the Clipboard card first (and only, with no remembered sizes).
             assert!(h.query_by_label_contains("BLANK DOCUMENT PRESETS (1)").is_some());
             let heading = h.get_by_label_contains("BLANK DOCUMENT PRESETS").rect();
+
             click_at(&mut h, heading.left_bottom() + egui::vec2(80.0, 60.0));
             assert_eq!(fields(&h).get("__preset").and_then(|v| v.as_str()), Some(super::super::CLIPBOARD));
             enter(&mut h);

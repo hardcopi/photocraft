@@ -5,7 +5,7 @@ use photocraft_color::{ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, Size};
 use photocraft_format::RecoveryStore;
 use photocraft_geom::Rect;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recovered, Services};
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest, Recoverable, Services};
 use std::cell::RefCell;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -13,12 +13,16 @@ use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::Arc;
 
+#[cfg(test)]
+mod recovery_tests;
+
 /// Everything File › Open reads: PhotoCraft, Photoshop and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd) and swatches (.aco, .ase), which go to the preset libraries.
+/// Photoshop brushes (.abr), gradients (.grd), swatches (.aco, .ase) and keyboard shortcut sets
+/// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam",
-    "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase", "af",
-    "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm",
+    "pam", "pfm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "svg", "svgz", "aco", "ase",
+    "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 
 /// Open dialog extensions that also match uppercase and mixed-case names (`IMG_0001.JPG`).
@@ -33,9 +37,9 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
 /// extension comes first, so a .pcraft document saves as .pcraft by default and everything else
-/// keeps defaulting to Photoshop.
+/// keeps defaulting to PSD.
 const SAVE_FILTERS: &[(&str, &[&str])] = &[
-    ("Photoshop", &["psd", "psb"]),
+    ("PSD Document", &["psd", "psb"]),
     ("PhotoCraft", &["pcraft"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg"]),
@@ -86,11 +90,19 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
         dialog = dialog.set_parent(parent);
     }
     let answer: Pin<Box<dyn Future<Output = Option<FileDialogAnswer>> + Send>> = match request {
-        FileDialogRequest::Open { multiple, initial_dir } => {
+        FileDialogRequest::Open { multiple, initial_dir, extensions } => {
             if let Some(dir) = initial_dir.as_ref().filter(|d| Path::new(d).is_dir()) {
                 dialog = dialog.set_directory(dir);
             }
-            let dialog = dialog.add_filter("All Formats", &open_filter_extensions(OPEN_EXTS)).add_filter("PhotoCraft", &open_filter_extensions(&["pcraft"]));
+            // A command-specific filter must not inherit the image formats used by File › Open.
+            let dialog = if let Some(exts) = extensions {
+                dialog.add_filter("Supported Files", &open_filter_extensions(&exts.iter().map(String::as_str).collect::<Vec<_>>()))
+            } else {
+                dialog
+                    .add_filter("All Formats", &open_filter_extensions(OPEN_EXTS))
+                    .add_filter("PhotoCraft", &open_filter_extensions(&["pcraft"]))
+                    .add_filter("Paint.NET", &open_filter_extensions(&["pdn"]))
+            };
             if multiple {
                 let picked = dialog.pick_files();
                 Box::pin(async move { picked.await.map(|files| FileDialogAnswer::Paths(files.iter().map(path_of).collect())) })
@@ -173,7 +185,7 @@ fn kdialog_filter() -> String {
 /// kdialog argv after the program name.
 fn kdialog_args(request: &FileDialogRequest) -> Vec<String> {
     match request {
-        FileDialogRequest::Open { multiple, initial_dir } => {
+        FileDialogRequest::Open { multiple, initial_dir, extensions } => {
             let mut args = Vec::new();
             if *multiple {
                 args.extend(["--multiple".into(), "--separate-output".into()]);
@@ -181,7 +193,10 @@ fn kdialog_args(request: &FileDialogRequest) -> Vec<String> {
             args.push("--getopenfilename".into());
             let start = initial_dir.as_ref().filter(|d| Path::new(d).is_dir()).cloned().unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
             args.push(start);
-            args.push(kdialog_filter());
+            args.push(match extensions.as_ref().filter(|e| !e.is_empty()) {
+                Some(exts) => format!("{}|Supported Files", exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")),
+                None => kdialog_filter(),
+            });
             args
         }
         FileDialogRequest::Save { suggested } => {
@@ -199,14 +214,19 @@ fn kdialog_args(request: &FileDialogRequest) -> Vec<String> {
 fn zenity_args(request: &FileDialogRequest) -> Vec<String> {
     let mut args = vec!["--file-selection".into(), "--separator".into(), "|".into()];
     match request {
-        FileDialogRequest::Open { multiple, initial_dir } => {
+        FileDialogRequest::Open { multiple, initial_dir, extensions } => {
             if *multiple {
                 args.push("--multiple".into());
             }
-            args.push("--file-filter".into());
-            args.push(format!("All Formats | {}", OPEN_EXTS.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")));
-            args.push("--file-filter".into());
-            args.push("PhotoCraft | *.pcraft".into());
+            if let Some(exts) = extensions.as_ref().filter(|e| !e.is_empty()) {
+                args.push("--file-filter".into());
+                args.push(format!("Supported Files | {}", exts.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")));
+            } else {
+                args.push("--file-filter".into());
+                args.push(format!("All Formats | {}", OPEN_EXTS.iter().map(|e| format!("*.{e}")).collect::<Vec<_>>().join(" ")));
+                args.push("--file-filter".into());
+                args.push("PhotoCraft | *.pcraft".into());
+            }
             if let Some(dir) = initial_dir.as_ref().filter(|d| Path::new(d).is_dir()) {
                 args.push("--filename".into());
                 args.push(format!("{}/", dir.trim_end_matches('/')));
@@ -289,6 +309,38 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     photocraft_format::atomic_write(path, bytes).map_err(|e| e.to_string())
 }
 
+fn export_options(settings: &photocraft_ui_egui::ExportSettings) -> photocraft_io::ExportOptions {
+    let mut opts = photocraft_io::ExportOptions::default();
+    if let Some(q) = settings.jpeg_quality {
+        opts.encode.jpeg_quality = q;
+    }
+    opts.encode.webp_lossless = settings.webp_lossless;
+    if let Some(q) = settings.webp_quality {
+        opts.encode.webp_quality = q;
+    }
+    opts.tiff_layers = settings.tiff_layers;
+    opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+    opts
+}
+
+/// A save on a worker thread (`Services::save_file`, #2017): encode, then write atomically.
+/// Cancelling while encoding leaves the file on disk untouched; once writing starts the save
+/// can't be cancelled.
+fn save_file(
+    doc: &Document,
+    path: &str,
+    settings: &photocraft_ui_egui::ExportSettings,
+    ctl: &photocraft_ui_egui::jobs_ui::SaveCtl,
+) -> Result<Vec<String>, String> {
+    ctl.progress(0.0, "Encoding");
+    let opts = export_options(settings);
+    let r = crate::crash_guard::guard("Save", || photocraft_io::export(doc, path, &opts).map_err(|e| e.to_string()))?;
+    ctl.commit()?;
+    ctl.progress(0.0, "Writing");
+    write_atomic(Path::new(path), &r.bytes)?;
+    Ok(r.warnings)
+}
+
 type SharedRecovery = Rc<RefCell<Option<RecoveryStore>>>;
 
 /// Run `f` on the recovery store (`Err` without a config directory). The service closures never
@@ -302,8 +354,9 @@ fn with_store<R>(store: &SharedRecovery, f: impl FnOnce(&mut RecoveryStore) -> R
 /// directory, so autosaves fail and nothing is recovered). Recovered documents keep their entries
 /// until a newer autosave replaces them or they're saved or closed (see [`RecoveryStore`]).
 fn recovery_services(dir: Option<PathBuf>) -> Services {
+    let recover_dir = dir.clone();
     let store: SharedRecovery = Rc::new(RefCell::new(dir.map(RecoveryStore::new)));
-    let (s1, s2, s3, s4) = (store.clone(), store.clone(), store.clone(), store.clone());
+    let (s1, s2, s4) = (store.clone(), store.clone(), store.clone());
     Services {
         autosave: Some(Box::new(move |doc: &Arc<Document>, revision: u64, path: Option<&str>| {
             with_store(&s1, |s| s.autosave_checked(doc, revision, path.map(str::to_string)))?
@@ -313,8 +366,16 @@ fn recovery_services(dir: Option<PathBuf>) -> Services {
             let _ = with_store(&s2, |s| s.discard(id));
         })),
         recover: Some(Box::new(move || {
-            let found = with_store(&s3, |s| s.recover()).unwrap_or_default();
-            found.into_iter().map(|(e, doc)| Recovered { key: e.info.key, path: e.info.original_path, doc }).collect()
+            let Some(dir) = recover_dir.as_ref() else { return Vec::new() };
+            photocraft_format::list_recovery(dir)
+                .into_iter()
+                .map(|e| Recoverable {
+                    key: e.info.key.clone(),
+                    name: e.info.document_name.clone(),
+                    path: e.info.original_path.clone(),
+                    load: Box::new(move || photocraft_format::recover(&e).map_err(|e| e.to_string())),
+                })
+                .collect()
         })),
         adopt_autosave: Some(Box::new(move |id: u64, key: &str| {
             let _ = with_store(&store, |s| s.adopt(id, key));
@@ -389,18 +450,10 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             crate::crash_guard::guard("Open", || photocraft_io::import(name, bytes).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string()))
         })),
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
-            let mut opts = photocraft_io::ExportOptions::default();
-            if let Some(q) = settings.jpeg_quality {
-                opts.encode.jpeg_quality = q;
-            }
-            opts.encode.webp_lossless = settings.webp_lossless;
-            if let Some(q) = settings.webp_quality {
-                opts.encode.webp_quality = q;
-            }
-            opts.tiff_layers = settings.tiff_layers;
-            opts.xmp = if settings.xmp_all { photocraft_io::XmpEmbed::All } else { photocraft_io::XmpEmbed::None };
+            let opts = export_options(settings);
             crate::crash_guard::guard("Export", || photocraft_io::export(doc, path, &opts).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string()))
         })),
+        save_file: Some(Arc::new(save_file)),
         file_dialog: Some(Box::new(show_file_dialog)),
         write: Some(Box::new(|path: &str, bytes: &[u8]| write_atomic(Path::new(path), bytes))),
         automation_read,
@@ -442,7 +495,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
             })
         }),
         load_prefs: Some(Box::new(|| std::fs::read_to_string(prefs_file()?).ok())),
+        photoshop_shortcuts: Some(Box::new(|| crate::photoshop_settings::live_keyboard_shortcuts(&|k| std::env::var_os(k)))),
         save_prefs: Some(Box::new(|text: &str| write_atomic(&prefs_file().ok_or("no config directory")?, text.as_bytes()))),
+        system_theme: crate::appearance::service(),
         append_text: Some(Box::new(|path: &str, text: &str| {
             use std::io::Write;
             let mut f = std::fs::OpenOptions::new().create(true).append(true).open(path).map_err(|e| e.to_string())?;
@@ -584,7 +639,7 @@ mod tests {
 
     #[test]
     fn kdialog_open_lists_formats_and_the_starting_folder() {
-        let args = kdialog_args(&FileDialogRequest::Open { multiple: true, initial_dir: Some("/tmp".into()) });
+        let args = kdialog_args(&FileDialogRequest::Open { multiple: true, initial_dir: Some("/tmp".into()), extensions: None });
         assert!(args.contains(&"--getopenfilename".into()));
         assert!(args.contains(&"--multiple".into()));
         assert!(args.contains(&"--separate-output".into()));
@@ -679,7 +734,7 @@ mod tests {
         for (name, ext) in asked.iter().zip(exts) {
             assert!(save_filters(name)[0].1.iter().any(|e| e == ext), "{name}: {:?}", save_filters(name)[0]);
         }
-        assert_eq!(save_filters("Untitled")[0].0, "Photoshop", "no extension keeps the default");
+        assert_eq!(save_filters("Untitled")[0].0, "PSD Document", "no extension keeps the default");
     }
 
     #[test]
@@ -706,7 +761,16 @@ mod tests {
     /// One app launch with crash recovery in `dir` (dropping it is the crash: background writes
     /// already queued finish, nothing else runs).
     fn launch(dir: &Path) -> PhotocraftApp {
-        PhotocraftApp::new(Session::new(), recovery_services(Some(dir.to_path_buf())))
+        let mut app = PhotocraftApp::new(Session::new(), recovery_services(Some(dir.to_path_buf())));
+        let ctx = egui::Context::default();
+        prefs_ui::tick(&mut app, &ctx);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.session.has_jobs() && std::time::Instant::now() < deadline {
+            photocraft_ui_egui::jobs_ui::tick(&mut app, &ctx);
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(!app.session.has_jobs(), "recovery finished");
+        app
     }
 
     /// The first pixel of each open document, and whether it's unsaved.

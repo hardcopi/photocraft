@@ -235,7 +235,7 @@ pub(crate) fn layer_param(s: &Session, p: &Value) -> Result<LayerId> {
 pub fn blend_from_str(s: &str) -> Option<BlendMode> {
     let norm = |x: &str| x.to_ascii_lowercase().replace([' ', '_', '-', '(', ')'], "");
     let want = norm(s);
-    std::iter::once(BlendMode::PassThrough).chain(BlendMode::LAYER_MODES).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
+    std::iter::once(BlendMode::PassThrough).chain(BlendMode::layer_modes()).find(|m| norm(m.label()) == want || norm(&format!("{m:?}")) == want)
 }
 
 /// The active selection as the mask of a layer being created, or None without a selection.
@@ -1099,6 +1099,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::color_to_alpha_cmds::specs());
     v.extend(crate::gallery_cmds::specs());
     v.extend(crate::gradient_fill_cmds::specs());
+    v.extend(crate::solid_fill_cmds::specs());
     v.extend(crate::type_cmds::specs());
     v.extend(crate::transform_cmds::specs());
     v.extend(crate::float_cmds::specs());
@@ -1153,6 +1154,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::distort_cmds::specs());
     v.extend(crate::analysis_cmds::specs());
     v.extend(crate::notes_cmds::specs());
+    v.extend(crate::history_cmds::specs());
     v.extend(crate::proof_sim::specs());
     v.extend(crate::presets::specs());
     v.extend(crate::document_preset_cmds::specs());

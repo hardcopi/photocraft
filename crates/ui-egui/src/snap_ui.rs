@@ -56,7 +56,7 @@ pub fn options(app: &PhotocraftApp) -> SnapOptions {
 
 /// Snap tolerance in document pixels at the current zoom.
 pub fn tolerance(app: &PhotocraftApp) -> f64 {
-    SNAP_PX / app.current_zoom().max(0.01) as f64
+    SNAP_PX / app.point_zoom().max(0.01) as f64
 }
 
 fn smart_on(app: &PhotocraftApp) -> bool {

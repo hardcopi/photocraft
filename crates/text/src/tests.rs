@@ -48,6 +48,19 @@ fn registering_fonts_moves_the_generation() {
 }
 
 #[test]
+fn literal_psd_tabs_shape_as_whitespace_without_shifting_text_offsets() {
+    let mut e = TextEngine::new();
+    let src = "A\tB";
+    let l = e.layout(&point(src, 20.0), 72.0);
+    let plain = e.layout(&point("AB", 20.0), 72.0);
+    assert_eq!(l.lines.len(), 1);
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "a tab must not render a tofu glyph");
+    assert!(width(&l) > width(&plain), "the tab reserves whitespace");
+    assert!(l.clusters.iter().all(|c| c.range.end <= src.len()), "the source byte offsets stay valid");
+    assert!(l.caret(2).0 > l.caret(1).0, "caret moves across the tab");
+}
+
+#[test]
 fn metrics_are_stable_and_scale_with_dpi() {
     let mut e = TextEngine::new();
     let a = e.layout(&point("Hamburgefonstiv", 12.0), 72.0);
@@ -1126,4 +1139,53 @@ fn word_and_line_navigation() {
     assert_eq!(kept, char_index(text, l.lines[1].range.start), "kept column");
     assert_eq!(jumped, char_index(text, l.lines[1].range.end), "own column");
     assert!(jumped > kept);
+}
+
+/// Thai text sample with above/below marks (sara i, mai ek, mai tho, mai han-akat, sara u).
+const THAI_SAMPLE: &str = "ภาษาไทย สวัสดีครับ ผู้ที่น้ำ";
+
+#[test]
+fn thai_in_latin_font_falls_back_to_installed_thai_font() {
+    // #1909: Thai typed in a Latin-only font (a newly chosen font has no PostScript name to find
+    // the original Thai face) must fall back to an installed Thai-capable font, not .notdef.
+    let mut e = TextEngine::with_system_fonts();
+    let Some(thai) = fonts::THAI_FAMILIES.iter().find(|f| e.fonts.has_family(f)) else {
+        eprintln!("skipped: no Thai-capable font installed");
+        return;
+    };
+    let l = e.layout(&point(THAI_SAMPLE, 24.0), 72.0);
+    assert!(!l.glyphs.is_empty());
+    assert!(l.glyphs.iter().all(|g| g.id != 0), "Thai drawn with .notdef although {thai} is installed");
+    // Latin next to Thai keeps the chosen font; only the Thai clusters fall back.
+    let l = e.layout(&point("Thai ไทย", 24.0), 72.0);
+    assert!(l.glyphs.iter().all(|g| g.id != 0));
+    let (first, last) = (l.glyphs.first().map(|g| g.face), l.glyphs.last().map(|g| g.face));
+    assert_ne!(first, last, "Latin and Thai drawn with the same face");
+}
+
+#[test]
+fn thai_fallback_candidates_cover_every_platform() {
+    // Logic-level half of #1909 (runs without Thai fonts): Windows, macOS and Linux each have a
+    // Thai-capable family in the fallback candidates, ahead of the broad last-resort fonts.
+    for order in [crate::cjk::script_order(None), crate::cjk::script_order(Some("ja"))] {
+        let fb = fonts::fallback_candidates(&order);
+        let last = fb.iter().position(|f| *f == "Arial Unicode MS").unwrap();
+        for fam in ["Leelawadee UI", "Tahoma", "Thonburi", "Noto Sans Thai"] {
+            let i = fb.iter().position(|f| *f == fam).unwrap_or_else(|| panic!("{fam} missing from {fb:?}"));
+            assert!(i < last, "{fam} after the last-resort fonts");
+        }
+    }
+}
+
+#[test]
+fn a_served_script_fallback_joins_the_fallback_stack_once_it_arrives() {
+    let Some(cairo) = crate::CRAFT_FONTS.iter().find(|f| f.family == "Cairo") else {
+        eprintln!("skipping: built without craft-fonts (set CRAFT_FONTS_DIR to a craft-fonts checkout)");
+        return;
+    };
+    crate::served::add_fonts(&crate::served::parse_manifest("Cairo | Regular | fonts/cairo/Cairo.ttf | Arab,Latn\n").0);
+    let mut db = fonts::FontDb::new();
+    assert!(!db.fallback_stack().any(|f| f == "Cairo"), "not before it arrives");
+    db.register_font_data(cairo.bytes.to_vec());
+    assert!(db.fallback_stack().any(|f| f == "Cairo"), "{:?}", db.fallback_stack().collect::<Vec<_>>());
 }

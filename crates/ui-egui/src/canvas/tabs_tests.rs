@@ -111,3 +111,29 @@ fn dragging_a_document_tab_reorders_the_session() {
     assert_eq!(names(&h), ["ch1-p02.png", "ch1-p03.png", "ch1-p01.png"]);
     assert_eq!(super::tab_reorder_to(0, 3), Some(2));
 }
+
+#[test]
+fn saved_document_tabs_track_file_identity() {
+    for theme in ThemeKind::ALL {
+        let mut h = harness(2, theme);
+        h.state_mut().services.export = Some(Box::new(|_, _, _| Ok((vec![1], Vec::new()))));
+        h.state_mut().services.write = Some(Box::new(|_, _| Ok(())));
+        h.state_mut().save_as(Some("folder/My saved image.psd".into())).unwrap();
+        h.run_steps(2);
+        let pro = crate::theme::Tokens::get(&h.ctx).pro;
+        let app = h.state();
+        let label = if pro { pro_tab_title(app, 1) } else { "My saved image.psd".into() };
+        assert!(h.query_by_label(&label).is_some(), "saved tab in {theme:?}: {label}");
+        assert_eq!(app.session.active().unwrap().doc.name, "My saved image.psd");
+        h.state_mut().session.set_active(0);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().doc.name, "ch1-p01.png");
+        h.state_mut().session.set_active(1);
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.run_steps(2);
+        let label = if pro { pro_tab_title(h.state(), 1) } else { "My saved image.psd".into() };
+        assert!(h.query_by_label(&label).is_some());
+        assert_eq!(h.state().session.active().unwrap().doc.name, "My saved image.psd");
+        assert!(h.state().session.active().unwrap().is_dirty());
+    }
+}

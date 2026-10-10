@@ -189,7 +189,7 @@ impl FloatingGroup {
     }
 }
 
-/// Order, heights and collapsed state of the dock groups.
+/// Order, heights, collapsed state, floating groups and visibility of individual dock tabs.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DockLayout {
@@ -202,9 +202,38 @@ pub struct DockLayout {
     pub collapsed: Vec<Group>,
     /// Groups taken out of the dock column, keyed by group, with their window rect.
     pub floating: BTreeMap<Group, FloatingGroup>,
+    /// Names of tabs hidden by Close (not positions: Color/Swatches swap with the theme).
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub hidden_tabs: BTreeMap<Group, Vec<String>>,
 }
 
 impl DockLayout {
+    /// Visible tabs, retaining their original indices for commands and panel bodies.
+    pub fn visible_tabs(&self, group: Group, pro: bool) -> Vec<(usize, &'static str)> {
+        let hidden = self.hidden_tabs.get(&group);
+        group.tabs(pro).iter().copied().enumerate().filter(|(_, name)| !hidden.is_some_and(|xs| xs.iter().any(|x| x.as_str() == *name))).collect()
+    }
+
+    /// Hide one tab; it can be reopened through Window › Panel.
+    pub fn hide_tab(&mut self, group: Group, tab: usize, pro: bool) {
+        let Some(&name) = group.tabs(pro).get(tab) else { return };
+        let hidden = self.hidden_tabs.entry(group).or_default();
+        if !hidden.iter().any(|x| x.as_str() == name) {
+            hidden.push(name.to_owned());
+        }
+    }
+
+    /// Restore the tab requested by the Window menu or icon rail.
+    pub fn show_tab(&mut self, group: Group, tab: usize, pro: bool) {
+        let Some(&name) = group.tabs(pro).get(tab) else { return };
+        if let Some(hidden) = self.hidden_tabs.get_mut(&group) {
+            hidden.retain(|n| n != name);
+            if hidden.is_empty() {
+                self.hidden_tabs.remove(&group);
+            }
+        }
+    }
+
     /// Every group once, in display order.
     pub fn order(&self) -> Vec<Group> {
         let mut out: Vec<Group> = Vec::with_capacity(Group::ALL.len());
@@ -355,6 +384,9 @@ impl DockLayout {
 /// brought back, whatever state it was left in (#129).
 pub fn reveal(app: &mut PhotocraftApp, g: Group) {
     *g.shown_mut(&mut app.ui.panels) = true;
+    let selected = *g.tab_mut(&mut app.ui.dock_tabs);
+    let pro = matches!(app.ui.theme, crate::theme::ThemeKind::Pro | crate::theme::ThemeKind::ProMedium);
+    app.ui.dock.show_tab(g, selected, pro);
     app.ui.dock.set_collapsed(g, false);
 }
 
@@ -377,6 +409,7 @@ pub fn rail_click(app: &mut PhotocraftApp, g: Group, docked: bool) {
 enum Action {
     ToggleCollapse(Group),
     Close(Group),
+    CloseTab(Group, usize),
     Move(Group, Option<Group>),
     Float(Group, FloatingGroup),
     Dock(Group, Option<Group>),
@@ -441,15 +474,38 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         child.set_clip_rect(rect.intersect(ui.clip_rect()));
         child.spacing_mut().item_spacing.y = if t.pro { 0.0 } else { 6.0 };
         let before = *g.tab_mut(&mut app.ui.dock_tabs);
-        let mut sel = before;
-        let tabs = g.tabs(t.pro);
-        let resp = widgets::card_ex(&mut child, g.key(), tabs, &mut sel, collapsed, |ui, tab| {
+        let visible = app.ui.dock.visible_tabs(g, t.pro);
+        if visible.is_empty() {
+            continue;
+        }
+        let indices: Vec<usize> = visible.iter().map(|(i, _)| *i).collect();
+        let tabs: Vec<&str> = visible.iter().map(|(_, name)| *name).collect();
+        let mut sel = indices.iter().position(|i| *i == before).unwrap_or(0);
+        let resp = widgets::card_ex(&mut child, g.key(), &tabs, &mut sel, collapsed, |ui, shown_tab| {
+            let Some(&tab) = indices.get(shown_tab) else { return };
             draw_tab_body(app, ui, g, tab, &mut body);
         });
-        strips.push(StripRects { group: g, tabs: resp.tabs.clone(), menu: resp.menu.rect, chevron: resp.chevron });
-        // The body may switch tabs itself (Adjustments jumps back to Properties).
-        if sel != before {
-            *g.tab_mut(&mut app.ui.dock_tabs) = sel.min(tabs.len().saturating_sub(1));
+        strips.push(StripRects {
+            group: g,
+            tabs: resp.tabs.iter().filter_map(|(i, r)| indices.get(*i).map(|original| (*original, *r))).collect(),
+            menu: resp.menu.rect,
+            chevron: resp.chevron,
+        });
+        // The strip uses visible indices; dockTabs and the panel bodies use original indices.
+        if let Some(&picked) = indices.get(sel)
+            && picked != before
+        {
+            *g.tab_mut(&mut app.ui.dock_tabs) = picked;
+        }
+        if let Some(context) = resp.tab_context {
+            match context {
+                crate::tab_strip::TabContextAction::Close(i) => {
+                    if let Some(&tab) = indices.get(i) {
+                        actions.push(Action::CloseTab(g, tab));
+                    }
+                }
+                crate::tab_strip::TabContextAction::CloseGroup => actions.push(Action::Close(g)),
+            }
         }
         if resp.strip.double_clicked() || resp.tab_double_clicked || (collapsed && resp.tab_clicked) {
             actions.push(Action::ToggleCollapse(g));
@@ -470,7 +526,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, shown: &[Group], mut bod
         if dragging == Some(g) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
-        group_menu(app, &resp.menu, g, tabs, sel, collapsed, locked, false, &order, &mut actions);
+        group_menu(app, &resp.menu, g, &tabs, sel, collapsed, locked, false, &order, &mut actions);
         // Splitter in the gap below this group: resizes it against the next expanded group.
         if i + 1 < rects.len() && !collapsed && rects.iter().skip(i + 1).any(|(n, _)| !app.ui.dock.is_collapsed(*n)) {
             let gap = Rect::from_min_size(pos2(rect.left(), rect.bottom()), vec2(rect.width(), GAP)).expand2(vec2(0.0, 2.0));
@@ -644,6 +700,7 @@ fn group_menu(
 }
 
 fn apply_actions(app: &mut PhotocraftApp, actions: Vec<Action>) {
+    let pro = crate::theme::Tokens::for_kind(app.ui.theme).pro;
     for a in actions {
         match a {
             Action::ToggleCollapse(g) => {
@@ -651,6 +708,19 @@ fn apply_actions(app: &mut PhotocraftApp, actions: Vec<Action>) {
                 app.ui.dock.set_collapsed(g, on);
             }
             Action::Close(g) => *g.shown_mut(&mut app.ui.panels) = false,
+            Action::CloseTab(g, tab) => {
+                app.ui.dock.hide_tab(g, tab, pro);
+                let remaining = app.ui.dock.visible_tabs(g, pro);
+                if remaining.is_empty() {
+                    *g.shown_mut(&mut app.ui.panels) = false;
+                } else if *g.tab_mut(&mut app.ui.dock_tabs) == tab {
+                    // Prefer the next tab, or the previous one when closing the last.
+                    let next = remaining.iter().find(|(i, _)| *i > tab).or_else(|| remaining.last());
+                    if let Some(&(next, _)) = next {
+                        *g.tab_mut(&mut app.ui.dock_tabs) = next;
+                    }
+                }
+            }
             Action::Move(g, before) => {
                 if before != Some(g) {
                     app.ui.dock.move_group(g, before);
@@ -767,9 +837,9 @@ fn resize(layout: &mut DockLayout, heights: &[(Group, f32)], i: usize, dy: f32) 
     }
 }
 
-/// What `prefs.panelLayout` holds: the live layout, open panels and dock width.
+/// What `prefs.panelLayout` holds: the live layout, open panels, dock width and timeline.
 fn snapshot(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
-    let mut v = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock});
+    let mut v = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open});
     if let Some(w) = egui::containers::panel::PanelState::load(ctx, egui::Id::new("dock")).map(|p| p.size().x).filter(|w| w.is_finite()) {
         v["dockWidth"] = json!(w);
     }
@@ -800,8 +870,9 @@ pub fn restore(app: &mut PhotocraftApp) {
     }
 }
 
-/// Apply the `panels`, `dockTabs` and `dock` parts of a saved layout (a workspace or
-/// `panelLayout`). Missing or invalid parts are left alone.
+/// Apply the `panels`, `dockTabs`, `dock` and `timelineOpen` parts of a saved layout
+/// (a workspace or `panelLayout`). Missing or invalid dock parts are left alone; old
+/// layouts without Timeline visibility restore it closed.
 pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     if let Some(p) = v.get("panels").and_then(|p| serde_json::from_value(p.clone()).ok()) {
         app.ui.panels = p;
@@ -811,6 +882,10 @@ pub fn apply(app: &mut PhotocraftApp, v: &Value) {
     }
     if let Some(d) = v.get("dock").and_then(|d| serde_json::from_value(d.clone()).ok()) {
         app.ui.dock = d;
+    }
+    app.ui.timeline.open = v.get("timelineOpen").and_then(Value::as_bool).unwrap_or(false);
+    if !app.ui.timeline.open {
+        app.ui.timeline.playing = false;
     }
     if let Some(w) = v.get("dockWidth").and_then(Value::as_f64).filter(|w| w.is_finite()) {
         app.pending_dock_width = Some(w as f32);
