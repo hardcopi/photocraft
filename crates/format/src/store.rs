@@ -1,7 +1,7 @@
 //! Object storage (ZIP or directory), incremental writer and loader.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::time::SystemTime;
@@ -54,7 +54,7 @@ fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
 // Sources
 // ---------------------------------------------------------------------------
 
-pub(crate) trait Source {
+pub trait ByteSource {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>>;
 }
 
@@ -68,7 +68,7 @@ impl<'a> ZipSource<'a> {
     }
 }
 
-impl Source for ZipSource<'_> {
+impl ByteSource for ZipSource<'_> {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
         self.zip.read_by_name(path, max)
     }
@@ -78,15 +78,29 @@ pub(crate) struct DirSource {
     pub root: PathBuf,
 }
 
-impl Source for DirSource {
+impl ByteSource for DirSource {
     fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
         let p = self.root.join(path);
-        let len = std::fs::metadata(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?.len();
-        if len > max as u64 {
-            return Err(FormatError::LimitExceeded(format!("`{path}` is {len} bytes (max {max})")));
+        let metadata = std::fs::metadata(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?;
+        if !metadata.is_file() {
+            return Err(FormatError::corrupt(format!("`{path}` is not a regular file")));
         }
-        Ok(std::fs::read(p)?)
+        let mut file = std::fs::File::open(&p).map_err(|_| FormatError::corrupt(format!("missing `{path}`")))?;
+        read_entry(&mut file, metadata.len(), max, path)
     }
+}
+
+/// Read one opened bundle entry under its `max` budget. The stat `len` is a buffer hint only
+/// (files can change while open, and a FIFO reports 0), so the bound is enforced on the read
+/// itself, never on the hint.
+pub fn read_entry(file: &mut impl std::io::Read, len: u64, max: usize, path: &str) -> Result<Vec<u8>> {
+    let mut limited = file.take((max as u64).saturating_add(1));
+    let hint = len.min((max as u64).saturating_add(1));
+    let bytes = crate::read::read_all(&mut limited, hint)?;
+    if bytes.len() > max {
+        return Err(FormatError::LimitExceeded(format!("`{path}` exceeds {max} bytes")));
+    }
+    Ok(bytes)
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +141,7 @@ fn check_manifest_depth(json: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn read_manifest(src: &dyn Source, opts: &LoadOptions) -> Result<Manifest> {
+pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Manifest> {
     let raw = src.get(MANIFEST, opts.max_manifest_bytes)?;
     // serde_json stops at 128 levels (about 40 nested groups); the bounded check replaces that limit.
     check_manifest_depth(&raw)?;
@@ -172,7 +186,7 @@ fn take_array(v: &mut serde_json::Value, pointer: &str) -> Vec<serde_json::Value
 }
 
 struct LoadFetch<'a> {
-    src: &'a dyn Source,
+    src: &'a dyn ByteSource,
     opts: LoadOptions,
     total: u64,
     blobs: HashMap<String, Arc<Vec<u8>>>,
@@ -230,17 +244,34 @@ impl Fetch for LoadFetch<'_> {
     }
 }
 
-pub(crate) fn load(src: &dyn Source, opts: &LoadOptions) -> Result<Document> {
-    let m = read_manifest(src, opts)?;
-    let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
-    let mut loader = Loader { fetch: &mut fetch, preserve_ids: opts.preserve_ids, max_id: 0, id_map: HashMap::new() };
-    let doc = loader.document(&m.document)?;
-    if opts.preserve_ids && !convert::reserve_ids_through(loader.max_id) {
-        // Ids far beyond our counter: remap instead of risking collisions.
-        let fresh = LoadOptions { preserve_ids: false, ..*opts };
-        return load(src, &fresh);
+/// Refuses a declared canvas outside `opts`' budget before anything is decoded for it (#2935).
+fn admit_canvas(size: photocraft_geom::Size, opts: &LoadOptions) -> Result<()> {
+    let (w, h) = (size.width, size.height);
+    if w == 0 || h == 0 {
+        return Err(FormatError::corrupt(format!("canvas size {w}x{h} is empty")));
     }
-    Ok(doc)
+    if w > opts.max_canvas_side || h > opts.max_canvas_side {
+        return Err(FormatError::LimitExceeded(format!("canvas {w}x{h} exceeds {} pixels per side", opts.max_canvas_side)));
+    }
+    if size.area() > opts.max_canvas_pixels {
+        return Err(FormatError::LimitExceeded(format!("canvas {w}x{h} exceeds {} pixels", opts.max_canvas_pixels)));
+    }
+    Ok(())
+}
+
+pub(crate) fn load(src: &dyn ByteSource, opts: &LoadOptions) -> Result<Document> {
+    let m = read_manifest(src, opts)?;
+    admit_canvas(m.document.size, opts)?;
+    let mut fetch = LoadFetch { src, opts: *opts, total: 0, blobs: HashMap::new() };
+    let mut loader = Loader {
+        fetch: &mut fetch,
+        preserve_ids: opts.preserve_ids,
+        id_map: HashMap::new(),
+        contents_id_map: HashMap::new(),
+        legacy_linked_contents: HashMap::new(),
+        tiles: HashMap::new(),
+    };
+    loader.document(&m.document)
 }
 
 // ---------------------------------------------------------------------------
@@ -413,12 +444,135 @@ fn file_signature(metadata: &std::fs::Metadata) -> Option<FileSignature> {
 }
 
 fn path_signature(path: &Path) -> Result<Option<FileSignature>> {
-    match std::fs::metadata(path) {
+    match std::fs::symlink_metadata(path) {
         Ok(metadata) if metadata.is_file() => Ok(file_signature(&metadata)),
-        Ok(_) => Ok(None),
+        Ok(_) => Err(unsafe_bundle_entry(path)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.into()),
     }
+}
+
+fn unsafe_bundle_entry(path: &Path) -> FormatError {
+    FormatError::Io(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        format!("refusing directory bundle save: {} is a symlink or not a regular file", path.display()),
+    ))
+}
+
+/// The generic atomic writer intentionally follows a destination symlink. Directory bundles
+/// must reject one instead: all of their managed entries stay below the bundle root.
+fn plain_file_or_missing(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => Ok(()),
+        Ok(_) => Err(unsafe_bundle_entry(path)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+fn plain_directory_or_missing(path: &Path) -> Result<()> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => Ok(()),
+        Ok(_) => Err(FormatError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("refusing directory bundle save: {} is a symlink or not a directory", path.display()),
+        ))),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e.into()),
+    }
+}
+
+/// Use the canonical root after creation so a later replacement of the caller's path cannot
+/// redirect subsequent bundle operations. The caller may choose a symlinked root, but managed
+/// subdirectories and files below its resolved target must not be symlinks.
+fn bundle_root(dir: &Path) -> Result<PathBuf> {
+    let dir: PathBuf = dir.components().collect();
+    std::fs::create_dir_all(&dir)?;
+    let root = std::fs::canonicalize(&dir)?;
+    plain_directory_or_missing(&root)?;
+    for sub in ["tiles", "blobs", "composite"] {
+        let path = root.join(sub);
+        plain_directory_or_missing(&path)?;
+        if !path.exists() {
+            match std::fs::create_dir(&path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+        plain_directory_or_missing(&path)?;
+        if std::fs::canonicalize(&path)? != path {
+            return Err(unsafe_bundle_entry(&path));
+        }
+    }
+    Ok(root)
+}
+
+fn validate_bundle_file(root: &Path, path: &Path) -> Result<()> {
+    let parent = path.parent().ok_or_else(|| unsafe_bundle_entry(path))?;
+    if parent != root && parent != root.join("tiles") && parent != root.join("blobs") && parent != root.join("composite") {
+        return Err(unsafe_bundle_entry(path));
+    }
+    plain_directory_or_missing(parent)?;
+    if std::fs::canonicalize(parent)? != parent {
+        return Err(unsafe_bundle_entry(parent));
+    }
+    plain_file_or_missing(path)
+}
+
+fn write_bundle_file(root: &Path, path: &Path, data: &[u8]) -> Result<()> {
+    validate_bundle_file(root, path)?;
+    let parent = path.parent().ok_or_else(|| unsafe_bundle_entry(path))?;
+    let name = path.file_name().ok_or_else(|| unsafe_bundle_entry(path))?;
+    let mut temporary = None;
+    for _ in 0..8 {
+        let candidate = parent.join(crate::atomic::temp_name(&name.to_string_lossy()));
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(file) => {
+                temporary = Some((candidate, file));
+                break;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    let (tmp, mut file) = temporary.ok_or_else(|| {
+        FormatError::Io(std::io::Error::new(std::io::ErrorKind::AlreadyExists, format!("could not create a temporary file beside {}", path.display())))
+    })?;
+    let result = (|| -> Result<()> {
+        // The parent may have changed between validation and create_new. Check the new file's
+        // resolved location before putting document bytes into it.
+        if std::fs::canonicalize(&tmp)? != tmp {
+            return Err(unsafe_bundle_entry(&tmp));
+        }
+        validate_bundle_file(root, path)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        drop(file);
+        // Preserve the existing mode where possible, as the generic atomic writer does.
+        if let Ok(permissions) = std::fs::metadata(path).map(|m| m.permissions()) {
+            let _ = std::fs::set_permissions(&tmp, permissions);
+        }
+        // Recheck the parent and target just before publishing. rename replaces a symlink
+        // itself, never its referent, even if one appears after this check.
+        validate_bundle_file(root, path)?;
+        crate::atomic::retry_rename(crate::atomic::RenameRetry::platform(), || std::fs::rename(&tmp, path))?;
+        #[cfg(unix)]
+        {
+            let _ = std::fs::File::open(parent).and_then(|d| d.sync_all());
+        }
+        Ok(())
+    })();
+    if result.is_err() && validate_bundle_file(root, &tmp).is_ok() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
+fn remove_bundle_file(root: &Path, path: &Path) -> Result<()> {
+    validate_bundle_file(root, path)?;
+    std::fs::remove_file(path)?;
+    Ok(())
 }
 
 fn existing_object_is_valid(path: &Path, object: &Object, what: &str) -> Result<(bool, Option<FileSignature>)> {
@@ -578,16 +732,19 @@ impl PcraftWriter {
     /// rewrites missing or damaged objects, then writes the manifest
     /// atomically and removes unreferenced objects.
     pub fn save_dir(&mut self, doc: &Document, dir: &Path, opts: &SaveOptions) -> Result<SaveStats> {
+        let canonical_dir = bundle_root(dir)?;
+        let dir = canonical_dir.as_path();
+        let existing = list_objects(dir)?;
+        // Reject a hostile existing entry before writing any object or manifest. This also
+        // covers entries that this save would otherwise leave untouched or garbage-collect.
+        for path in [MANIFEST, THUMB, COMPOSITE] {
+            validate_bundle_file(dir, &dir.join(path))?;
+        }
         let p = self.prepare(doc, opts)?;
         let mut stats = p.stats;
-        for sub in ["tiles", "blobs", "composite"] {
-            std::fs::create_dir_all(dir.join(sub))?;
-        }
-        let canonical_dir = std::fs::canonicalize(dir)?;
         if self.verified_directory.as_ref().is_none_or(|cache| cache.directory != canonical_dir) {
-            self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir, ..Default::default() });
+            self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir.clone(), ..Default::default() });
         }
-        let existing = list_objects(dir)?;
         let generation = match &mut self.verified_directory {
             Some(cache) => {
                 cache.generation = cache.generation.saturating_add(1);
@@ -598,6 +755,9 @@ impl PcraftWriter {
         let recheck = self.rolling_recheck(&p.objects);
         for (path, obj) in &p.objects {
             let object_path = dir.join(path);
+            // bundle_root and list_objects validated the fixed parent directories once. Check
+            // each leaf here; write_bundle_file rechecks its parent around every mutation.
+            plain_file_or_missing(&object_path)?;
             let signature = path_signature(&object_path)?;
             let already_verified = !recheck.contains(path)
                 && signature.is_some_and(|signature| {
@@ -627,7 +787,7 @@ impl PcraftWriter {
                 Object::Tile(..) => stats.tiles_written += 1,
                 Object::Blob(_) => stats.blobs_written += 1,
             }
-            write_atomic(&object_path, &obj.compressed())?;
+            write_bundle_file(dir, &object_path, &obj.compressed())?;
             let written = path_signature(&object_path)?;
             if let Some(cache) = &mut self.verified_directory {
                 match written {
@@ -641,18 +801,27 @@ impl PcraftWriter {
             }
         }
         for (name, data) in &p.previews {
-            write_atomic(&dir.join(name), data)?;
+            write_bundle_file(dir, &dir.join(name), data)?;
         }
         for stale in [THUMB, COMPOSITE] {
             if !p.previews.iter().any(|(n, _)| *n == stale) {
-                let _ = std::fs::remove_file(dir.join(stale));
+                let path = dir.join(stale);
+                validate_bundle_file(dir, &path)?;
+                match remove_bundle_file(dir, &path) {
+                    Err(FormatError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    other => other?,
+                }
             }
         }
-        write_atomic(&dir.join(MANIFEST), &p.manifest)?;
+        write_bundle_file(dir, &dir.join(MANIFEST), &p.manifest)?;
+        // The manifest is committed: the save has succeeded. Removing objects it no longer
+        // references is best-effort housekeeping (a vanished or locked file must not turn a
+        // complete save into a reported failure); a leftover is retried on the next save.
         for path in existing {
             if !p.objects.contains_key(&path) {
-                std::fs::remove_file(dir.join(&path))?;
-                stats.objects_removed += 1;
+                if remove_bundle_file(dir, &dir.join(&path)).is_ok() {
+                    stats.objects_removed += 1;
+                }
                 if let Some(cache) = &mut self.verified_directory {
                     cache.objects.remove(&path);
                 }
@@ -701,12 +870,28 @@ impl PcraftWriter {
 fn list_objects(dir: &Path) -> Result<HashSet<String>> {
     let mut out = HashSet::new();
     for sub in ["tiles", "blobs"] {
-        let rd = std::fs::read_dir(dir.join(sub))?;
+        let object_dir = dir.join(sub);
+        plain_directory_or_missing(&object_dir)?;
+        if std::fs::canonicalize(&object_dir)? != object_dir {
+            return Err(unsafe_bundle_entry(&object_dir));
+        }
+        let rd = std::fs::read_dir(&object_dir)?;
         for e in rd {
             let e = e?;
             let name = e.file_name().to_string_lossy().into_owned();
             if name.ends_with(".zst") {
-                out.insert(format!("{sub}/{name}"));
+                let path = e.path();
+                match std::fs::symlink_metadata(&path) {
+                    Ok(metadata) if metadata.file_type().is_symlink() => return Err(unsafe_bundle_entry(&path)),
+                    Ok(metadata) if metadata.is_file() => {
+                        out.insert(format!("{sub}/{name}"));
+                    }
+                    // Stale directories cannot be removed with remove_file; leave them for later
+                    // cleanup without failing a save of otherwise valid content.
+                    Ok(_) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e.into()),
+                }
             }
         }
     }

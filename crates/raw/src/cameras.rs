@@ -93,6 +93,8 @@ const PROFILES: &[Profile] = &[Profile {
 /// * **D800E** (2 files): the camera's JPEG sits 8 x 6 pixels in from the left
 ///   and top of the 7424 x 4924 sensor data (56 and 4 pixels of margin on the
 ///   right and bottom), the same corner as the D4.
+/// * **D5100** (3 files): 8 x 8 pixels in from the left and top of the
+///   4992 x 3280 sensor data, giving the camera JPEG's 4928 x 3264 frame.
 /// * **ILCE-7** (2 files): 12 x 12 pixels in from the left and top of the
 ///   6048 x 4024 cRAW data (36 and 12 pixels of margin on the right and bottom).
 struct ImageArea {
@@ -105,6 +107,7 @@ struct ImageArea {
 }
 
 const IMAGE_AREAS: &[ImageArea] = &[
+    ImageArea { make: "NIKON CORPORATION", model: "NIKON D5100", size: (4992, 3280), crop: (8, 8, 4928, 3264) },
     ImageArea { make: "NIKON CORPORATION", model: "NIKON D800E", size: (7424, 4924), crop: (8, 6, 7360, 4912) },
     ImageArea { make: "SONY", model: "ILCE-7", size: (6048, 4024), crop: (12, 12, 6000, 4000) },
 ];
@@ -114,7 +117,7 @@ const IMAGE_AREAS: &[ImageArea] = &[
 pub(crate) fn apply(s: &mut Sensor) {
     let (Some(make), Some(model)) = (s.make.as_deref(), s.model.as_deref()) else { return };
     let (make, model) = (make.trim(), model.trim());
-    if let Some(a) = IMAGE_AREAS.iter().find(|a| a.make == make && a.model == model && a.size == (s.width, s.height)) {
+    if let Some(a) = IMAGE_AREAS.iter().find(|a| a.make == make && a.model == model && a.size == (s.width, s.height) && s.crop == s.active) {
         let (x, y, w, h) = a.crop;
         s.crop = Rect::new(x, y, w, h);
     }
@@ -181,6 +184,30 @@ mod tests {
         assert!(s.warnings.is_empty(), "the D4's black level is known: {:?}", s.warnings);
         // The profile gives a colour conversion for the as-shot white balance.
         assert!(s.color.balanced_to_xyz_d50([0.5, 1.0, 0.7]).is_some());
+    }
+
+    #[test]
+    fn d5100_image_area_respects_explicit_crops_and_exact_sensor_size() {
+        let mut s = nef("NIKON D5100", 4992, 3280);
+        // The NEF reader trims eight columns of row padding before applying the model area.
+        s.active = Rect::new(0, 0, 4984, 3280);
+        s.crop = s.active;
+        let wb = s.camera_wb;
+        apply(&mut s);
+        assert_eq!(s.crop, Rect::new(8, 8, 4928, 3264));
+        assert_eq!(s.active, Rect::new(0, 0, 4984, 3280));
+        assert_eq!(s.camera_wb, wb);
+        assert!(s.color.calibrations.is_empty() && s.tone_curve.is_empty());
+        assert_eq!(s.white, [16383.0; 3]);
+
+        s.crop = Rect::new(16, 12, 4800, 3200);
+        apply(&mut s);
+        assert_eq!(s.crop, Rect::new(16, 12, 4800, 3200));
+        for (model, w, h) in [("NIKON D5100", 2496, 1640), ("NIKON D5200", 4992, 3280)] {
+            let mut other = nef(model, w, h);
+            apply(&mut other);
+            assert_eq!(other.crop, other.active);
+        }
     }
 
     #[test]

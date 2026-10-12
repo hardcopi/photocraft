@@ -59,56 +59,56 @@ id = "UI-217-8"
 target = "Tool-specific canvas right-click menu; right-click spelling suggestions in text fields"
 status = "done"
 issue = 217
-note = "canvas_tool_menu.rs: selection, Pen/shapes, Crop, Hand, Zoom, Type-edit, Free Transform; painting tools keep the brush picker. spelling.rs host dictionary suggestions on type-tool and type-panel fields"
+note = "canvas_tool_menu.rs: selection, Pen/shapes, Crop, Hand, Zoom, Type-edit, Free Transform; painting tools keep the brush picker (paint_mouse.rs). text_field_menu.rs gives every text field its right-click Undo/Cut/Copy/Paste/Delete/Select All menu (#2921); spelling.rs host dictionary suggestions on type-tool and type-panel fields"
 
 [[item]]
 id = "UI-217-9"
 target = "UI scale presets 100/115/125/150/200 % through zoom_factor, remembered"
 status = "done"
 issue = 217
-note = "prefs UiScale includes P115; prefs_ui::sync_display_scale applies zoom_factor; Auto follows system DPI (2× on unscaled 4K). Remembered with the rest of Preferences"
+note = "prefs::UiScale offers Auto plus 75 to 300 percent (13 presets, more than the five this row lists); prefs_ui.rs display_scale resolves it (Auto follows the system scale, fractional and unscaled 4K included, #1072/#1278) and sync_display_scale applies it with ctx.set_zoom_factor. It is a preference, so it is remembered. The zoom_factor assert in input_tests.rs is about canvas zoom not scaling the interface, not about this setting"
 
 [[item]]
 id = "UI-217-10"
 target = "Appearance: animation toggle, canvas pattern toggle per theme, start-screen recents"
 status = "done"
 issue = 217
-note = "general.animatedZoom gates marching ants; interface.showCanvasPattern paints the pasteboard dots; start screen lists fileHandling.recentFiles (HOME_RECENT)"
+note = "interface.enableAnimations (prefs_ui.rs sync_animations, #3273) zeroes egui animation_time and scroll animation in both styles; general.animatedZoom gates marching ants; interface.showCanvasPattern paints the pasteboard dots; the Home screen lists recent files (canvas.rs home_recent, #2691 / HOME_RECENT)"
 
 [[item]]
 id = "UI-217-11"
 target = "Soft dark and soft light themes with picker previews; outlined knobs in light themes"
 status = "done"
 issue = 217
-note = "ThemeKind SoftDark/SoftLight plus Adwaita and Solarized; title-bar picker shows chrome/accent/card swatches; light non-pro knobs get a field_border stroke in widgets.rs"
+note = "theme.rs ThemeKind has SoftDark/SoftLight plus the four Pro brightness levels, Studio and Studio Light, Classic, Adwaita and Adwaita Dark, Solarized Dark, Breeze Light and Breeze Dark; title-bar picker shows chrome/accent/card swatches; light non-pro knobs get a field_border stroke in widgets.rs"
 
 [[item]]
 id = "UI-217-12"
 target = "Save custom New Document presets; a real Recent category"
 status = "done"
 issue = 217
-note = "Named presets already save through preferences. File › New › Recent is clipboard (if any) plus fileHandling.recentDocumentSizes (cap 8, newest first) recorded on file.new and open"
+note = "document_preset_cmds.rs and new_doc_ui.rs: named presets save/select/delete through preferences; Recent lists Clipboard, the last 20 documents created in the dialog (document.recent.*, persisted with the presets, newest first, deduplicated) and the uncovered defaults (#3131); created_documents_fill_the_recent_category"
 
 [[item]]
 id = "UI-217-13"
 target = "Numeric fields accept arithmetic and units; scrubby labels; double-click resets a slider"
 status = "done"
 issue = 217
-note = "parse_num_in accepts px/in/cm/mm/pt/pica/% with arithmetic; slider_row label scrubs; double-click on slider or label resets when a reset value is set"
+note = "widgets::value_field: arithmetic plus units (1in, 5mm, 72pt, 50%) converted at the document resolution (#3099); widgets::scrub_label makes options-bar, slider-row and Character labels scrubby (Shift x10, Alt fine); slider rows with a known default reset on double-click"
 
 [[item]]
 id = "UI-217-14"
 target = "Layers panel: wheel steps blend modes, drop on New/Trash duplicates/deletes, checker behind art"
 status = "done"
 issue = 217
-note = "combo_box_wheel / step_cyclic on BlendMode::LAYER_MODES; footer drop on New Layer duplicates, on Trash deletes; layer thumbs use checker_with + transparency colors"
+note = "panels.rs: the wheel steps the blend-mode dropdown (widgets::dropdown_wheel_hovered, #1747); rows dropped on New Layer/Group/Delete duplicate/group/delete them (footer_drop, #736), effect rows dropped on Delete delete that effect or the whole style (fx_trash_drop, #3102); pixel thumbnails draw widgets::checker behind the art; Shift+Plus/Minus step the layer's or the painting tool's blend mode (blend_keys.rs, #3102)"
 
 [[item]]
 id = "UI-217-15"
 target = "Curves: smoothing / pencil mode, black/grey/white eyedroppers, tooltips"
 status = "done"
 issue = 217
-note = "CurvesEditorState.pencil paints a polyline (resampled to ≤16 on release); Smooth is one Laplacian pass; eyedroppers already in adjust_dialog with tooltips"
+note = "Curves editor (adjust_editors.rs, dialog and Properties): Edit points / Draw (pencil) buttons and Smooth, all with tooltips; pencil curves are 256-level maps (Adjustment::Curves pencil, params pencil/smooth, PSD curv map form and smart-filter Mpng; #3088). Set Black/Neutral Gray/White Point eyedroppers in the Image > Adjustments > Curves dialog (adjust_dialog.rs, #873) and in a Curves adjustment layer's Properties panel (layer_picker.rs: a click on the image is one layer.setAdjustment with the eyedropper param, sampling below the layer; Esc or another tool disarms; #3110)"
 
 [[item]]
 id = "UI-217-16"
@@ -136,14 +136,14 @@ id = "UI-217-19"
 target = "Shortcut hints rendered per platform; Reveal label per OS"
 status = "done"
 issue = 217
-note = "shortcuts::pretty maps Cmd→Ctrl off-Mac for menus, tips and Keyboard Shortcuts. Reveal in Finder/Explorer/Files via layer_menu_cmds::reveal_in_file_manager_label (menu_catalog uses cfg!)"
+note = "hints and tooltips go through shortcuts::pretty (6266b7a9, #262; pretty_uses_the_platform_notation); menus::reveal_label names Reveal in Finder per OS (Show in Explorer / Show in Folder) in the Smart Objects menu and the tab menu; reveal_label_names_the_platform_file_manager + smart_objects_reveal_item_names_the_platform_file_manager"
 
 [[item]]
 id = "UI-217-20"
 target = "'Show rulers in new documents' preference; guides stored as f64"
 status = "done"
 issue = 217
-note = "unitsAndRulers.showRulersInNewDocuments default true; sync_views turns extras.rulers on for new views. Guides.horizontal/vertical are Vec<f64>"
+note = "unitsAndRulers.showRulersInNewDocuments default true; sync_views turns extras.rulers on for new views. View › Rulers is remembered in unitsAndRulers.showRulers and applied at launch and on change (#2918; rulers_open_as_last_set_after_a_restart); doc Guides are Vec<f64> through New Guide, .pcraft and PSD 1032 (guides_keep_sub_pixel_positions_through_pcraft_and_psd)"
 
 [[item]]
 id = "UI-217-21"
@@ -157,11 +157,11 @@ id = "UI-217-22"
 target = "Stamp Visible into a new layer keeping originals; Alt+Merge keeps originals"
 status = "done"
 issue = 217
-note = "layer.stampVisible on the Layer menu (Cmd+Alt+Shift+E); Alt+Merge Visible/Down still map to stampVisible/stampDown (stamp_cmds.rs)"
+note = "stamp_cmds.rs layer.stampVisible (Cmd+Alt+Shift+E) merges every visible layer into a new layer above the active one and keeps the originals; layer.stampDown (Cmd+Alt+E) too. As in Photoshop they have no menu item of their own: Alt + Layer > Merge Visible / Merge Down / Merge Layers run them (stamp_cmds::alt_variant, menus.rs); stamp_tests.rs alt_click_on_merge_items_stamps and cmd_alt_shift_e_stamps_visible_and_can_be_rebound"
 
 [[item]]
 id = "UI-217-23"
 target = "Layer clipboard: copy/paste whole layers (masks, styles, type) between documents"
 status = "done"
 issue = 217
-note = "Edit Copy with no pixel selection stores Session.layer_clipboard (pack_layers); Paste inserts like layer.copyToDocument. Selection and Copy Merged stay pixel clips"
+note = "Edit Copy with no pixel selection stores Session.layer_clipboard (pack_layers); Paste inserts like layer.copyToDocument. Selection and Copy Merged stay pixel clips. layer.copyToDocument also copies layers into another open document keeping names, content, masks, styles and blending (#589)"

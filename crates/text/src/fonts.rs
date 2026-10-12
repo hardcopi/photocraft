@@ -1,11 +1,13 @@
 //! Font database: bundled fonts (always available, also on the web), the optional craft-fonts
 //! Japanese fonts ([`crate::craft_fonts`], when built with `CRAFT_FONTS_DIR`), optional system
-//! fonts found by scanning the platform font directories (no fontconfig), user-registered font
-//! data, and PostScript-name lookup for PSD import.
+//! fonts found by scanning platform directories (plus Fontconfig's file list on Linux),
+//! user-registered font data, and PostScript-name lookup for PSD import.
 
 use std::collections::HashMap;
-use std::sync::Arc;
+#[cfg(not(target_arch = "wasm32"))]
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use parley::FontContext;
 use parley::fontique::{Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight, FontWidth, GenericFamily, SourceCache};
@@ -17,29 +19,63 @@ pub const DEFAULT_FAMILY: &str = "Inter";
 /// Bundled monospace family.
 pub const MONO_FAMILY: &str = "JetBrains Mono";
 
+/// An `assets/fonts` file as deflated by build.rs.
+macro_rules! bundled_font {
+    ($file:literal) => {
+        include_bytes!(concat!(env!("OUT_DIR"), "/fonts/", $file, ".deflate"))
+    };
+}
+
 // The font files are embedded once, here. The UI (`ui-egui` theme) uses these same statics:
 // a second `include_bytes!` of the same file elsewhere put a second 1.5 MB copy into the wasm.
-pub static INTER_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-pub static INTER_MEDIUM: &[u8] = include_bytes!("../../../assets/fonts/Inter-Medium.ttf");
-pub static INTER_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf");
-pub static JETBRAINS_MONO_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf");
+// They are stored deflated by build.rs (0.73 MB instead of 1.5 MB: the web build's 24 MiB size
+// gate, packaging/web/package.sh) and inflated on first use, once per process.
+pub static INTER_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Regular.ttf")));
+pub static INTER_MEDIUM: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-Medium.ttf")));
+pub static INTER_SEMIBOLD: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("Inter-SemiBold.ttf")));
+pub static JETBRAINS_MONO_REGULAR: LazyLock<Vec<u8>> = LazyLock::new(|| inflate_font(bundled_font!("JetBrainsMono-Regular.ttf")));
 
 /// Fonts shipped with Photocraft (OFL; licences in `assets/fonts`).
-pub static BUNDLED: &[(&str, &[u8])] = &[
-    ("Inter-Regular.ttf", INTER_REGULAR),
-    ("Inter-Medium.ttf", INTER_MEDIUM),
-    ("Inter-SemiBold.ttf", INTER_SEMIBOLD),
-    ("JetBrainsMono-Regular.ttf", JETBRAINS_MONO_REGULAR),
+pub static BUNDLED: [(&str, &LazyLock<Vec<u8>>); 4] = [
+    ("Inter-Regular.ttf", &INTER_REGULAR),
+    ("Inter-Medium.ttf", &INTER_MEDIUM),
+    ("Inter-SemiBold.ttf", &INTER_SEMIBOLD),
+    ("JetBrainsMono-Regular.ttf", &JETBRAINS_MONO_REGULAR),
 ];
 
-/// Families tried (if installed) after the requested one, for missing glyphs. The Thai and CJK
-/// families ([`THAI_FAMILIES`], [`crate::cjk::families`]) go between these two lists, in the UI locale's script order.
+/// Inflated fonts are bounded (the largest is 0.42 MB), so corrupt data can't exhaust memory.
+const MAX_BUNDLED_FONT_BYTES: u64 = 16 << 20;
+
+/// Inflate a bundled font. Data that doesn't inflate gives no font (empty bytes, which every
+/// consumer skips), never a panic; `bundled_fonts_inflate_to_their_files` keeps it from happening.
+fn inflate_font(deflated: &[u8]) -> Vec<u8> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    match flate2::read::DeflateDecoder::new(deflated).take(MAX_BUNDLED_FONT_BYTES + 1).read_to_end(&mut out) {
+        Ok(_) if out.len() as u64 <= MAX_BUNDLED_FONT_BYTES => out,
+        _ => Vec::new(),
+    }
+}
+
+/// Families tried (if installed) after the requested one, for missing glyphs. The Southeast Asian
+/// and CJK families ([`THAI_FAMILIES`], [`KHMER_FAMILIES`], [`LAO_FAMILIES`], [`MYANMAR_FAMILIES`],
+/// [`crate::cjk::families`]) go between these two lists, in the UI locale's script order.
 const FALLBACK_CANDIDATES: &[&str] = &["Noto Sans", "Segoe UI", "DejaVu Sans", "Geeza Pro", "Arial Hebrew", "Noto Sans Arabic", "Noto Sans Hebrew"];
 /// Thai-capable families: Windows (Leelawadee UI since Windows 8; Tahoma and Leelawadee on
 /// older systems), macOS (Thonburi, Sukhumvit Set) and Linux (Noto). Text in a font without Thai
 /// glyphs falls back to these, as with Photoshop's missing glyph protection (#1909).
 pub const THAI_FAMILIES: &[&str] =
     &["Leelawadee UI", "Leelawadee", "Tahoma", "Thonburi", "Sukhumvit Set", "Noto Sans Thai", "Noto Sans Thai Looped", "Noto Sans Thai UI"];
+/// Khmer-capable families: macOS (Khmer Sangam MN, Khmer MN), Windows (`Khmer UI` on 8; from 8.1
+/// `Leelawadee UI` in [`THAI_FAMILIES`] covers Khmer too) and Linux (Noto). Khmer in a font without
+/// Khmer glyphs had no candidate to fall back to and drew .notdef boxes (#218).
+pub const KHMER_FAMILIES: &[&str] = &["Khmer Sangam MN", "Khmer MN", "Khmer UI", "Noto Sans Khmer"];
+/// Lao-capable families: macOS (Lao Sangam MN, Lao MN), Windows (`Lao UI` on 8; `Leelawadee UI` in
+/// [`THAI_FAMILIES`] from 8.1) and Linux (Noto, static and looped forms).
+pub const LAO_FAMILIES: &[&str] = &["Lao Sangam MN", "Lao MN", "Lao UI", "Noto Sans Lao", "Noto Sans Lao Looped"];
+/// Myanmar/Burmese-capable families: macOS (Myanmar Sangam MN, Myanmar MN), Windows (Myanmar Text)
+/// and Linux (Noto).
+pub const MYANMAR_FAMILIES: &[&str] = &["Myanmar Sangam MN", "Myanmar MN", "Myanmar Text", "Noto Sans Myanmar"];
 /// Broad-coverage and emoji fonts, tried after the CJK script fonts so shared Han characters get
 /// the locale's forms instead of Arial Unicode's.
 const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji"];
@@ -48,6 +84,9 @@ const FALLBACK_LAST: &[&str] = &["Arial Unicode MS", "Apple Color Emoji", "Segoe
 pub fn fallback_candidates(order: &[crate::cjk::CjkScript; 4]) -> Vec<&'static str> {
     let mut v = FALLBACK_CANDIDATES.to_vec();
     v.extend_from_slice(THAI_FAMILIES);
+    v.extend_from_slice(KHMER_FAMILIES);
+    v.extend_from_slice(LAO_FAMILIES);
+    v.extend_from_slice(MYANMAR_FAMILIES);
     for s in order {
         // craft-fonts' Japanese fonts (if built in) go ahead of the installed Japanese fonts, in
         // the Japanese slot of the locale order, so shared Han keeps the locale's forms.
@@ -124,7 +163,7 @@ impl FontDb {
             face_aliases: HashMap::new(),
         };
         for (_, bytes) in BUNDLED {
-            db.register_font_data(bytes.to_vec());
+            db.register_static_font(bytes.as_slice());
         }
         // The optional craft-fonts (empty unless built with CRAFT_FONTS_DIR; always empty on
         // wasm32), before any system font.
@@ -142,8 +181,8 @@ impl FontDb {
         db
     }
 
-    /// Scans the platform font directories (once). Font files are memory-mapped lazily by
-    /// fontique when a face is first used.
+    /// Scans the platform font directories once, plus Fontconfig's file list on Linux. Font files
+    /// are memory-mapped lazily by fontique when a face is first used.
     pub fn load_system_fonts(&mut self) {
         if self.system_loaded {
             return;
@@ -156,12 +195,18 @@ impl FontDb {
             for d in system_font_dirs() {
                 collect_font_files(&d, 0, &mut files);
             }
+            #[cfg(target_os = "linux")]
+            files.extend(fontconfig_font_paths());
             // PingFang (the macOS Chinese UI font) lives outside the font folders.
             if cfg!(target_os = "macos") {
                 files.extend(crate::cjk::mac_pingfang());
             }
-            for f in files {
-                self.fcx.collection.load_fonts_from_paths([f]);
+            let mut seen = HashSet::new();
+            for path in files {
+                let key = path.canonicalize().unwrap_or_else(|_| path.clone());
+                if seen.insert(key) {
+                    self.fcx.collection.load_fonts_from_paths([path]);
+                }
             }
             self.ps_cache.clear();
             self.face_cache.clear();
@@ -238,6 +283,37 @@ impl FontDb {
         v.sort_by_key(|s| s.to_lowercase());
         v.dedup();
         v
+    }
+
+    /// Each listed family's localized (non-English) name, for font menus with Preferences ▸ Type ▸
+    /// Show Font Names in English off (Photoshop then lists e.g. "MS Gothic" as "ＭＳ ゴシック").
+    /// Families without one are absent. Read from the same name ID the family name comes from
+    /// (typographic family, else family), so the pair always names the same family. Documents keep
+    /// the English family: this is a display label only.
+    pub fn localized_family_names(&mut self) -> HashMap<String, String> {
+        let mut out = HashMap::new();
+        for family in self.families() {
+            let Some(info) = self.fcx.collection.family_by_name(&family) else {
+                continue;
+            };
+            let Some(face) = info.fonts().first() else {
+                continue;
+            };
+            let Some(blob) = face.load(Some(&mut self.fcx.source_cache)) else {
+                continue;
+            };
+            let Ok(font) = skrifa::FontRef::from_index(blob.as_ref(), face.index()) else {
+                continue;
+            };
+            let names =
+                |id| -> Vec<(String, Option<String>)> { font.localized_strings(id).map(|s| (s.chars().collect(), s.language().map(str::to_string))).collect() };
+            let typographic = names(StringId::TYPOGRAPHIC_FAMILY_NAME);
+            let names = if typographic.is_empty() { names(StringId::FAMILY_NAME) } else { typographic };
+            if let Some(local) = localized_name(&family, &names) {
+                out.insert(family, local);
+            }
+        }
+        out
     }
 
     pub fn has_family(&mut self, name: &str) -> bool {
@@ -476,7 +552,7 @@ pub fn guess_from_postscript(ps: &str) -> ResolvedFont {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
+pub(crate) fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path::PathBuf>) {
     let Ok(rd) = std::fs::read_dir(dir) else {
         return;
     };
@@ -492,8 +568,56 @@ fn collect_font_files(dir: &std::path::Path, depth: u32, out: &mut Vec<std::path
     }
 }
 
+/// Fontconfig knows about configured font directories that are not in our portable path list.
+/// Keep this optional and shell-free: directory scans remain the fallback when `fc-list` is not
+/// installed or Fontconfig cannot enumerate fonts.
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn fontconfig_font_paths() -> Vec<std::path::PathBuf> {
+    let Ok(output) = std::process::Command::new("fc-list").arg("--format=%{file}\\n").output() else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    fontconfig_paths_from_output(&output.stdout).into_iter().filter(|path| path.is_file()).collect()
+}
+
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn fontconfig_paths_from_output(output: &[u8]) -> Vec<std::path::PathBuf> {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::OsStringExt;
+
+    let mut seen = HashSet::new();
+    output
+        .split(|byte| *byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .map(|line| std::path::PathBuf::from(OsString::from_vec(line.to_vec())))
+        .filter(|path| {
+            path.is_absolute()
+                && path.extension().and_then(|ext| ext.to_str()).is_some_and(|ext| matches!(ext.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc" | "otc"))
+        })
+        .map(|path| path.canonicalize().unwrap_or(path))
+        .filter(|path| seen.insert(path.clone()))
+        .collect()
+}
+
+#[cfg(all(test, target_os = "linux", not(target_arch = "wasm32")))]
+mod fontconfig_tests {
+    use super::fontconfig_paths_from_output;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parses_unique_absolute_font_paths_from_fontconfig() {
+        let paths = fontconfig_paths_from_output(
+            b"/usr/share/fonts/example.ttf\nrelative.otf\n/usr/share/fonts/README.txt\n/usr/local/fonts/collection.OTC\n/usr/share/fonts/example.ttf\n\n",
+        );
+
+        assert_eq!(paths, vec![PathBuf::from("/usr/share/fonts/example.ttf"), PathBuf::from("/usr/local/fonts/collection.OTC")]);
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
-fn system_font_dirs() -> Vec<std::path::PathBuf> {
+pub(crate) fn system_font_dirs() -> Vec<std::path::PathBuf> {
     use std::path::PathBuf;
     let home = std::env::var_os("HOME").map(PathBuf::from);
     let mut v = Vec::new();
@@ -529,6 +653,21 @@ fn system_font_dirs() -> Vec<std::path::PathBuf> {
 
 /// A platform-private family (macOS names its UI faces with a leading '.'): never listed or
 /// picked by default.
+/// The localized family name among a font's `(name, language)` family-name records: the first
+/// one in a language other than English that differs from `english` (the name the font menus
+/// store). `None` when the font only names itself in English (most fonts).
+pub fn localized_name(english: &str, names: &[(String, Option<String>)]) -> Option<String> {
+    let is_english = |lang: &str| {
+        let primary = lang.split(['-', '_']).next().unwrap_or(lang);
+        primary.eq_ignore_ascii_case("en")
+    };
+    names
+        .iter()
+        .filter(|(name, lang)| lang.as_deref().is_some_and(|l| !l.is_empty() && !is_english(l)) && !name.trim().is_empty() && name != english)
+        .map(|(name, _)| name.clone())
+        .next()
+}
+
 pub fn is_hidden_family(name: &str) -> bool {
     name.starts_with('.')
 }
@@ -560,7 +699,7 @@ mod tests {
         let czech = "aábcčdďeéěfghiíjklmnňoópqrřsštťuúůvwxyýzž„“";
         let letters: String = czech.chars().chain(czech.chars().flat_map(char::to_uppercase)).collect();
         for (name, bytes) in super::BUNDLED {
-            let font = skrifa::FontRef::new(bytes).expect("bundled font parses");
+            let font = skrifa::FontRef::new(bytes.as_slice()).expect("bundled font parses");
             let cmap = font.charmap();
             let missing: String = letters.chars().filter(|c| cmap.map(*c).is_none_or(|g| g.to_u32() == 0)).collect();
             assert!(missing.is_empty(), "{name} lacks Czech glyphs: {missing}");
@@ -575,11 +714,48 @@ mod tests {
         let french = "àâæçéèêëîïôœùûüÿ";
         let letters: String = french.chars().chain(french.chars().flat_map(char::to_uppercase)).chain("«»\u{a0}’".chars()).collect();
         for (name, bytes) in super::BUNDLED {
-            let font = skrifa::FontRef::new(bytes).expect("bundled font parses");
+            let font = skrifa::FontRef::new(bytes.as_slice()).expect("bundled font parses");
             let cmap = font.charmap();
             let missing: String = letters.chars().filter(|c| cmap.map(*c).is_none_or(|g| g.to_u32() == 0)).collect();
             assert!(missing.is_empty(), "{name} lacks French glyphs: {missing:?}");
         }
+    }
+
+    /// The deflated fonts in the binary inflate to exactly the files in `assets/fonts`.
+    #[test]
+    fn bundled_fonts_inflate_to_their_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts");
+        for (name, bytes) in super::BUNDLED {
+            assert_eq!(bytes.as_slice(), std::fs::read(dir.join(name)).unwrap(), "{name}");
+        }
+    }
+
+    /// Corrupt or oversized font data gives no font, not a panic.
+    #[test]
+    fn corrupt_bundled_font_data_gives_no_font() {
+        assert!(super::inflate_font(b"\xff\xff not deflate").is_empty());
+        assert!(super::inflate_font(b"").is_empty());
+        let mut db = super::FontDb::new();
+        assert!(db.register_font_data(super::inflate_font(b"\x00garbage")).is_empty());
+    }
+
+    fn names(v: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
+        v.iter().map(|(n, l)| (n.to_string(), l.map(str::to_string))).collect()
+    }
+
+    /// Show Font Names in English off: a CJK font's native family name is its menu label.
+    #[test]
+    fn localized_name_picks_the_first_non_english_family_name() {
+        let ms_gothic = names(&[("MS Gothic", Some("en-US")), ("ＭＳ ゴシック", Some("ja-JP"))]);
+        assert_eq!(super::localized_name("MS Gothic", &ms_gothic).as_deref(), Some("ＭＳ ゴシック"));
+        let yahei = names(&[("Microsoft YaHei", Some("en")), ("微软雅黑", Some("zh-CN")), ("微軟雅黑", Some("zh-TW"))]);
+        assert_eq!(super::localized_name("Microsoft YaHei", &yahei).as_deref(), Some("微软雅黑"));
+        // English-only fonts, other English locales, unknown languages and copies of the English
+        // name give no localized name.
+        assert_eq!(super::localized_name("Arial", &names(&[("Arial", Some("en-US"))])), None);
+        assert_eq!(super::localized_name("Arial", &names(&[("Arial", Some("en-GB")), ("Arial", Some("de-DE"))])), None);
+        assert_eq!(super::localized_name("X", &names(&[("Y", None), ("  ", Some("ja-JP"))])), None);
+        assert_eq!(super::localized_name("X", &[]), None);
     }
 
     #[test]

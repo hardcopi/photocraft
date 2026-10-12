@@ -376,6 +376,9 @@ mod tests {
         });
         d.last_applied_comp = Some(7);
         let res = write_comps_resource(&d).unwrap();
+        // `list` is a length-4 string id, as Photoshop writes it, never a code.
+        assert!(res.windows(8).any(|w| w == b"\0\0\0\x04list"));
+        assert!(!res.windows(8).any(|w| w == b"\0\0\0\0list"));
         let cm = write_cmls(&d.layer_comps, None, d.layer(lid).unwrap(), 3).unwrap();
         // Attach as Photoshop would: shmd with cmls plus another item.
         let mut raw = vec![(*b"shmd", write_shmd(&[MetadataItem::new(*b"cust", vec![1, 2])]))];

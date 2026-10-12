@@ -11,7 +11,7 @@
 //! stay [`Adjustment::Unsupported`] and are written back verbatim.
 
 use photocraft_doc::Adjustment;
-use photocraft_doc::adjust::{CurvePoint, HueRange, LevelsChannel, ToneSpace};
+use photocraft_doc::adjust::{CURVE_MAP_LEN, CurvePoint, HueRange, LevelsChannel, ToneSpace, curve_map, curve_map_outputs};
 use photocraft_psd::descriptor::{Descriptor, Value, VersionedDescriptor};
 
 /// All PSD adjustment keys recognized as adjustment layers.
@@ -43,7 +43,9 @@ fn levels_rec(d: &[u8], at: usize) -> Option<LevelsChannel> {
 }
 
 fn parse_curves(d: &[u8]) -> Option<Adjustment> {
-    // pad(1) version(2) bitmap(4)
+    // map flag(1) version(2) bitmap(4). A map (Photoshop's pencil-drawn curves) stores 256 output
+    // bytes per channel instead of a point list (psd-tools reads the flag as `is_map`).
+    let pencil = *d.first()? != 0;
     let version = be16(d, 1)?;
     if version != 1 && version != 4 {
         return None;
@@ -54,6 +56,14 @@ fn parse_curves(d: &[u8]) -> Option<Adjustment> {
     let mut curves: Vec<Vec<CurvePoint>> = vec![line(), line(), line(), line(), line()];
     for bit in 0..32usize {
         if bits & (1 << bit) == 0 {
+            continue;
+        }
+        if pencil {
+            let map = d.get(at..at + CURVE_MAP_LEN)?;
+            at += CURVE_MAP_LEN;
+            if let Some(slot) = curves.get_mut(bit) {
+                *slot = curve_map(&map.iter().map(|&b| f32::from(b) / 255.0).collect::<Vec<_>>());
+            }
             continue;
         }
         let n = usize::from(be16(d, at)?);
@@ -72,7 +82,7 @@ fn parse_curves(d: &[u8]) -> Option<Adjustment> {
     let mut it = curves.into_iter();
     let master = it.next()?;
     let (r, g, b, k) = (it.next()?, it.next()?, it.next()?, it.next()?);
-    Some(Adjustment::Curves { master, per_channel: [r, g, b], space: ToneSpace::Rgb, black: k })
+    Some(Adjustment::Curves { master, per_channel: [r, g, b], space: ToneSpace::Rgb, black: k, pencil })
 }
 
 fn desc_num(d: &Descriptor, key: &str) -> Option<f32> {
@@ -257,7 +267,10 @@ fn be32(d: &[u8], at: usize) -> Option<u32> {
 /// key), reverse, dither, [method], name, colour stops (location /4096, midpoint %, colour
 /// space + four u16 components, 2 bytes), transparency stops, then smoothness (/4096) among
 /// noise-gradient fields. Smoothness, midpoints and the method are baked into dense stops like
-/// gradient fills. Noise gradients (no colour stops) and non-RGB stops stay unsupported.
+/// gradient fills. Stops may be in any plain colour space Photoshop writes (RGB, HSB, CMYK, Lab,
+/// Grayscale: a CMYK or Lab document stores them in its own space); they are converted to RGB
+/// through the colour-managed conversions (the document's CMYK profile when one is in scope).
+/// Noise gradients (no colour stops) and stops in other spaces (book colours) stay unsupported.
 fn parse_gradient_map(d: &[u8]) -> Option<Adjustment> {
     let version = be16(d, 0)?;
     let reverse = *d.get(2)? != 0;
@@ -275,11 +288,9 @@ fn parse_gradient_map(d: &[u8]) -> Option<Adjustment> {
     for _ in 0..n {
         let loc = (be32(d, at)? as f32 / 4096.0).clamp(0.0, 1.0);
         let mid = be32(d, at + 4)? as f32 / 100.0;
-        if be16(d, at + 8)? != 0 {
-            return None;
-        }
-        let c = |k: usize| be16(d, at + 10 + 2 * k).map(|v| f32::from(v) / 65535.0);
-        stops.push((loc, photocraft_color::Color::rgb(c(0)?, c(1)?, c(2)?)));
+        let space = be16(d, at + 8)?;
+        let c = |k: usize| be16(d, at + 10 + 2 * k);
+        stops.push((loc, crate::channel_map::decode_known_color(space, [c(0)?, c(1)?, c(2)?, c(3)?])?));
         mids.push(mid);
         at += 20;
     }
@@ -297,6 +308,23 @@ fn parse_gradient_map(d: &[u8]) -> Option<Adjustment> {
     let mut stops: Vec<(f32, [f32; 3])> = baked.iter().map(|(t, c)| (*t, c.to_rgb())).collect();
     stops.sort_by(|a, b| a.0.total_cmp(&b.0));
     Some(Adjustment::GradientMap { stops, reverse, dither })
+}
+
+/// Points an imported `grdm` block at `target` when only Reverse and/or Dither differ (the
+/// stops parse unchanged): patches those two bytes and returns `true`, so the file's own stops
+/// (in whatever colour space it stored them), smoothness and method survive the save. `false`
+/// leaves `data` untouched.
+pub(crate) fn retarget_gradient_map(data: &mut [u8], target: &Adjustment, channels: Channels) -> bool {
+    let Adjustment::GradientMap { stops, reverse, dither } = target else { return false };
+    let same_stops = matches!(parse(b"grdm", data, None, channels), Adjustment::GradientMap { stops: s, .. } if s == *stops);
+    match (same_stops, data.get_mut(2..4)) {
+        (true, Some(flags)) => {
+            flags[0] = u8::from(*reverse);
+            flags[1] = u8::from(*dither);
+            true
+        }
+        _ => false,
+    }
 }
 
 /// `grdm` version 1 for [`Adjustment::GradientMap`] (Classic interpolation, Smoothness 0, so
@@ -616,12 +644,16 @@ pub fn write(adj: &Adjustment) -> Vec<([u8; 4], Vec<u8>)> {
             }
             return vec![(*b"levl", v)];
         }
-        Adjustment::Curves { master, per_channel, space, black } => {
-            v.push(0);
+        Adjustment::Curves { master, per_channel, space, black, pencil } => {
+            v.push(u8::from(*pencil));
             put16(&mut v, 1);
             let ink = *space == ToneSpace::Cmyk && black.len() >= 2;
             v.extend_from_slice(&(if ink { 0b11111u32 } else { 0b1111 }).to_be_bytes());
             for c in std::iter::once(master).chain(per_channel.iter()).chain(ink.then_some(black)) {
+                if *pencil {
+                    v.extend(curve_map_outputs(c).iter().map(|&o| u8::try_from(q255(o)).unwrap_or(u8::MAX)));
+                    continue;
+                }
                 put16(&mut v, c.len().min(19) as u16);
                 for p in c.iter().take(19) {
                     put16(&mut v, q255(p.output));
@@ -788,6 +820,111 @@ mod tests {
         assert!(matches!(parse(b"grdm", &[0, 1, 0, 0, 0, 0, 0, 0, 0, 0], None, Channels::Rgb), Adjustment::Unsupported { .. }));
     }
 
+    #[test]
+    fn pencil_curves_read_and_write_the_map_form() {
+        // Photoshop's pencil-drawn curves: map flag 1, then 256 output bytes per channel.
+        let mut block = vec![1, 0, 1, 0, 0, 0, 0b1111];
+        let maps: [Vec<u8>; 4] = [
+            (0..=255u8).rev().collect(),
+            (0..=255u8).map(|k| if k < 128 { 0 } else { 255 }).collect(),
+            (0..=255u8).collect(),
+            (0..=255u8).map(|k| k / 2).collect(),
+        ];
+        for m in &maps {
+            block.extend_from_slice(m);
+        }
+        let a = parse(b"curv", &block, None, Channels::Rgb);
+        let Adjustment::Curves { master, per_channel, pencil, .. } = &a else { panic!("{a:?}") };
+        assert!(*pencil);
+        assert_eq!(master.len(), CURVE_MAP_LEN);
+        assert_eq!((master[0].output, master[255].output), (1.0, 0.0));
+        assert_eq!((per_channel[0][127].output, per_channel[0][128].output), (0.0, 1.0));
+        assert_eq!(write(&a)[0].1, block);
+    }
+
+    /// A two-stop `grdm` (version 1) whose stops are the colour structures `a` and `b`.
+    fn grdm_with(a: (u16, [u16; 4]), b: (u16, [u16; 4])) -> Vec<u8> {
+        let mut v = write_gradient_map(&[(0.0, [0.0; 3]), (1.0, [1.0; 3])], false, false);
+        // Header 4 + name length 4 + "Custom\0" 14 + stop count 2; 20 bytes per stop.
+        for (i, (space, c)) in [a, b].into_iter().enumerate() {
+            let at = 24 + 20 * i + 8;
+            v[at..at + 2].copy_from_slice(&space.to_be_bytes());
+            for (k, x) in c.iter().enumerate() {
+                v[at + 2 + 2 * k..at + 4 + 2 * k].copy_from_slice(&x.to_be_bytes());
+            }
+        }
+        v
+    }
+
+    fn ends(a: &Adjustment) -> ([f32; 3], [f32; 3]) {
+        match a {
+            Adjustment::GradientMap { stops, .. } => (stops[0].1, stops[stops.len() - 1].1),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn gradient_map_stops_in_every_colour_space() {
+        use photocraft_color::{Color, ColorMode};
+        let white_rgb = (0, [65535, 65535, 65535, 0]);
+        // CMYK, stored inverted: 65535 = no ink. Full K only.
+        let k_only = grdm_with((2, [65535, 65535, 65535, 0]), white_rgb);
+        let expected = Color { mode: ColorMode::Cmyk, c: [0.0, 0.0, 0.0, 1.0], alpha: 1.0 }.to_rgb();
+        for channels in [Channels::Cmyk, Channels::Rgb, Channels::Lab] {
+            let a = parse(b"grdm", &k_only, None, channels);
+            let (first, last) = ends(&a);
+            assert!(first.iter().zip(expected).all(|(x, y)| (x - y).abs() < 1e-5), "{first:?} vs {expected:?}");
+            assert!(first[0] < 0.4 && (first[0] - first[2]).abs() < 0.05, "K-only black is a dark neutral: {first:?}");
+            assert_eq!(last, [1.0; 3]);
+        }
+        // Lab: L 50, a 0, b 0 is a neutral mid grey; L 100 white.
+        let lab = parse(b"grdm", &grdm_with((7, [5000, 0, 0, 0]), (7, [10000, 0, 0, 0])), None, Channels::Lab);
+        let (first, last) = ends(&lab);
+        assert!(first.iter().all(|v| (v - 0.466).abs() < 0.01), "{first:?}");
+        assert!(last.iter().all(|v| *v > 0.99), "{last:?}");
+        // Lab with chroma: a = +60 is reddish (a and b are signed hundredths).
+        let red = parse(b"grdm", &grdm_with((7, [5000, 6000, 0, 0]), white_rgb), None, Channels::Lab);
+        let (first, _) = ends(&red);
+        assert!(first[0] > first[1] + 0.2, "{first:?}");
+        // Grayscale: 0..10000 is ink coverage (10000 = black).
+        let gray = parse(b"grdm", &grdm_with((8, [10000, 0, 0, 0]), (8, [0, 0, 0, 0])), None, Channels::Gray);
+        assert_eq!(ends(&gray), ([0.0; 3], [1.0; 3]));
+        // HSB: hue 240 degrees (2/3 of 65535), full saturation and brightness = blue.
+        let hsb = parse(b"grdm", &grdm_with((1, [43690, 65535, 65535, 0]), white_rgb), None, Channels::Rgb);
+        let (first, _) = ends(&hsb);
+        assert!(first[0] < 1e-3 && first[1] < 1e-3 && (first[2] - 1.0).abs() < 1e-3, "{first:?}");
+        // Book colours and unknown ids are not guessed: the block stays raw.
+        for space in [3u16, 9, 0xFFFF] {
+            let d = grdm_with((space, [1, 2, 3, 4]), white_rgb);
+            assert!(matches!(parse(b"grdm", &d, None, Channels::Rgb), Adjustment::Unsupported { .. }), "space {space}");
+        }
+        // Truncated stops never panic.
+        for n in 0..k_only.len() {
+            let _ = parse(b"grdm", &k_only[..n], None, Channels::Cmyk);
+        }
+    }
+
+    #[test]
+    fn gradient_map_reverse_and_dither_keep_the_stops_block() {
+        let original = grdm_with((2, [65535, 65535, 65535, 0]), (7, [10000, 0, 0, 0]));
+        let Adjustment::GradientMap { stops, .. } = parse(b"grdm", &original, None, Channels::Cmyk) else { panic!() };
+        let mut data = original.clone();
+        let target = Adjustment::GradientMap { stops: stops.clone(), reverse: true, dither: true };
+        assert!(retarget_gradient_map(&mut data, &target, Channels::Cmyk));
+        assert_eq!(&data[2..4], &[1, 1]);
+        assert_eq!(data[4..], original[4..], "the stops keep their colour spaces");
+        assert_eq!(parse(b"grdm", &data, None, Channels::Cmyk), target);
+        // Edited stops are not patched in.
+        let mut edited = stops;
+        edited[0].1 = [0.5; 3];
+        let mut data2 = original.clone();
+        let target = Adjustment::GradientMap { stops: edited, reverse: false, dither: false };
+        assert!(!retarget_gradient_map(&mut data2, &target, Channels::Cmyk));
+        assert_eq!(data2, original);
+        assert!(!retarget_gradient_map(&mut [], &target, Channels::Cmyk));
+        assert!(!retarget_gradient_map(&mut data2, &Adjustment::Invert, Channels::Cmyk));
+    }
+
     fn rt(a: Adjustment) {
         let blocks = write(&a);
         assert!(!blocks.is_empty(), "{a:?}");
@@ -823,6 +960,7 @@ mod tests {
             per_channel: [pts(&[(0, 10), (255, 255)]), pts(&[(0, 0), (255, 245)]), pts(&[(0, 0), (64, 32), (255, 255)])],
             space: ToneSpace::Rgb,
             black: Vec::new(),
+            pencil: false,
         });
         // CMYK ink curves and levels keep their black record.
         let ink = Adjustment::Curves {
@@ -830,6 +968,7 @@ mod tests {
             per_channel: [pts(&[(0, 0), (255, 255)]), pts(&[(0, 30), (255, 255)]), pts(&[(0, 0), (255, 255)])],
             space: ToneSpace::Cmyk,
             black: pts(&[(0, 0), (128, 100), (255, 255)]),
+            pencil: false,
         };
         let b = write(&ink);
         assert_eq!(parse(&b[0].0, &b[0].1, None, Channels::Cmyk), ink);

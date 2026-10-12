@@ -257,7 +257,7 @@ fn the_pattern_is_picked_from_its_swatches() {
     let sky = ids[h.state().session.patterns.items.iter().position(|p| p.name == "Sky").unwrap()].clone();
     assert_ne!(pattern(&h), json!(sky), "starts on another pattern");
     assert!(h.query_by_label("Sky").is_none(), "the grid opens on a click");
-    h.get_by_label("Patterns").click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Patterns").click();
     h.run_steps(3);
     h.get_by_label("Sky").click();
     h.run_steps(3);

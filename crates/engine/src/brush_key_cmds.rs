@@ -11,9 +11,10 @@ use crate::{Result, Session};
 /// Photoshop's largest brush diameter, in pixels.
 pub const MAX_SIZE: f32 = 5000.0;
 
-/// `[` / `]`: 25 % smaller or larger, at least a pixel larger so small brushes still grow.
+/// `[` / `]`: 25 % smaller or larger, and at least a pixel either way so small brushes still grow
+/// and shrink (2 / 1.25 rounds back to 2, which kept `[` from reaching 1 px, #3229).
 fn size_step(size: f32, up: bool) -> f32 {
-    let next = if up { (size * 1.25).round().max(size + 1.0) } else { (size / 1.25).round() };
+    let next = if up { (size * 1.25).round().max(size + 1.0) } else { (size / 1.25).round().min(size - 1.0) };
     next.clamp(1.0, MAX_SIZE)
 }
 
@@ -57,6 +58,13 @@ mod tests {
     fn steps_like_photoshop() {
         assert_eq!(size_step(1.0, false), 1.0, "never below 1 px");
         assert_eq!(size_step(1.0, true), 2.0, "small brushes still grow");
+        assert_eq!(size_step(2.0, false), 1.0, "small brushes still shrink (#3229)");
+        assert_eq!(size_step(3.0, false), 2.0);
+        assert_eq!(size_step(4.0, false), 3.0);
+        for size in [2.0, 3.0, 5.0, 8.0, 13.0, 100.0] {
+            assert!(size_step(size, false) < size, "`[` always shrinks {size}");
+            assert!(size_step(size, true) > size, "`]` always grows {size}");
+        }
         assert_eq!(size_step(100.0, true), 125.0);
         assert_eq!(size_step(125.0, false), 100.0);
         assert_eq!(size_step(MAX_SIZE, true), MAX_SIZE, "never past the largest brush");
@@ -74,6 +82,12 @@ mod tests {
         assert_eq!(s.tools.brush.size, 50.0);
         s.execute("tools.decreaseBrushSize", Value::Null).unwrap();
         assert_eq!(s.tools.brush.size, 40.0);
+        // Pixel artists: `[` held down reaches 1 px (#3229).
+        s.execute("tools.setBrush", json!({"brush": {"size": 3}})).unwrap();
+        for expected in [2.0, 1.0, 1.0] {
+            s.execute("tools.decreaseBrushSize", Value::Null).unwrap();
+            assert_eq!(s.tools.brush.size, expected);
+        }
         s.execute("tools.increaseBrushHardness", json!({})).unwrap();
         assert_eq!(s.tools.brush.hardness, 0.75);
         s.execute("tools.decreaseBrushHardness", json!({"junk": [1, 2]})).unwrap();
