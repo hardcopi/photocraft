@@ -42,6 +42,8 @@ flate2 = { workspace = true }
 rayon = { workspace = true }
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
+# AI Horde REST client for Edit › Generative Fill (native only).
+ureq = { version = "2.12", default-features = true }
 
 # Installed RAM for the GPU memory budget (`gpu_canvas::physical_memory`): the safe binding the
 # desktop app already uses, pinned to the same version.

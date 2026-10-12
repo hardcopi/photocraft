@@ -3039,3 +3039,21 @@ curves	Smooth	Lisser
 	Recent document sizes	Tailles de document récentes
 	Show canvas pattern	Afficher le motif du canevas
 	Show rulers in new documents	Afficher les règles dans les nouveaux documents
+	Generative Fill…	Remplissage génératif…
+	Generative Fill	Remplissage génératif
+	Prompt	Invite
+	Describe what should appear in the selection.	Décrivez ce qui doit apparaître dans la sélection.
+	AI Horde	AI Horde
+	API key (optional)	Clé API (facultatif)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Sans clé, l’accès anonyme est utilisé. Les grandes sélections sont envoyées au plus en 1024 px.
+	Generative Fill needs a selection on a pixel layer	Le remplissage génératif nécessite une sélection sur un calque de pixels
+	enter a prompt describing what should appear	saisissez une invite décrivant ce qui doit apparaître
+	Generative Fill is only available in the desktop app.	Le remplissage génératif n’est disponible que dans l’application de bureau.
+	Queued on AI Horde…	En file d’attente sur AI Horde…
+	Waiting for an AI Horde worker…	En attente d’un worker AI Horde…
+	Downloading result…	Téléchargement du résultat…
+	Transform On Drop	Transformer au relâchement
+	AI (AI Horde)	IA (AI Horde)
+	Hint (optional)	Indice (facultatif)
+	AI reconstructs the selection to match the surroundings.	L’IA reconstruit la sélection d’après les alentours.
+	AI Content-Aware Fill is only available in the desktop app.	Le remplissage d’après le contenu par IA n’est disponible que dans l’application de bureau.

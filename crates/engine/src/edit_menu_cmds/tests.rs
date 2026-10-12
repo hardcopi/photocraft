@@ -255,6 +255,48 @@ fn content_aware_fill_outputs_and_sampling() {
 }
 
 #[test]
+fn content_aware_fill_applies_generated_pixels_in_the_selection() {
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 10, "y": 8, "width": 12, "height": 10})).unwrap();
+    let rgba: Vec<Value> = (0..12 * 10).flat_map(|_| [json!(0), json!(200), json!(0), json!(255)]).collect();
+    let r = s
+        .execute(
+            "edit.contentAwareFill",
+            json!({
+                "method": "ai",
+                "width": 12,
+                "height": 10,
+                "origin": [10, 8],
+                "rgba": rgba,
+                "output": "current",
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["filled"].as_u64(), Some(12 * 10));
+    let v = px(&s, 12, 10);
+    assert!(v[1] > 0.6, "{v:?}");
+    assert!(v[0] < 0.2, "{v:?}");
+    let outside = px(&s, 1, 1);
+    assert!(outside[0] > 0.9 && outside[1] > 0.9, "left pixels outside the selection: {outside:?}");
+    assert_eq!(s.active().unwrap().history.undo_label(), Some("Content-Aware Fill"));
+    s.undo();
+    let v = px(&s, 12, 10);
+    assert!(v[0] > 0.9 && v[1] > 0.9, "undo restores white: {v:?}");
+}
+
+#[test]
+fn content_aware_fill_ai_without_pixels_is_an_error() {
+    let mut s = blob_session(8);
+    let before = s.active().unwrap().doc.clone();
+    let past = s.active().unwrap().history.past_len();
+    let err = s.execute("edit.contentAwareFill", json!({"method": "ai"})).unwrap_err().to_string();
+    assert!(err.contains("generated"), "{err}");
+    let st = s.active().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&before, &st.doc));
+    assert_eq!(st.history.past_len(), past);
+}
+
+#[test]
 fn content_aware_scale_keeps_subject() {
     for depth in [8, 16, 32] {
         let mut s = session(depth);

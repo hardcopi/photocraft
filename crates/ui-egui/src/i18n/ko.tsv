@@ -3210,3 +3210,21 @@ curves	Smooth	매끄럽게
 	Recent document sizes	최근 문서 크기
 	Show canvas pattern	캔버스 패턴 표시
 	Show rulers in new documents	새 문서에서 눈금자 표시
+	Generative Fill…	생성형 채우기…
+	Generative Fill	생성형 채우기
+	Prompt	프롬프트
+	Describe what should appear in the selection.	선택 영역에 나타날 내용을 설명하세요.
+	AI Horde	AI Horde
+	API key (optional)	API 키(선택)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	키가 비어 있으면 익명 접속을 사용합니다. 큰 선택 영역은 최대 1024픽셀로 보냅니다.
+	Generative Fill needs a selection on a pixel layer	생성형 채우기를 사용하려면 픽셀 레이어에 선택 영역이 필요합니다
+	enter a prompt describing what should appear	나타날 내용을 설명하는 프롬프트를 입력하세요
+	Generative Fill is only available in the desktop app.	생성형 채우기는 데스크톱 앱에서만 사용할 수 있습니다.
+	Queued on AI Horde…	AI Horde 대기열…
+	Waiting for an AI Horde worker…	AI Horde 워커 대기 중…
+	Downloading result…	결과 다운로드 중…
+	Transform On Drop	놓을 때 변형
+	AI (AI Horde)	AI(AI Horde)
+	Hint (optional)	힌트(선택)
+	AI reconstructs the selection to match the surroundings.	AI가 주변을 맞춰 선택 영역을 재구성합니다.
+	AI Content-Aware Fill is only available in the desktop app.	AI 콘텐츠에 맞는 채우기는 데스크톱 앱에서만 사용할 수 있습니다.

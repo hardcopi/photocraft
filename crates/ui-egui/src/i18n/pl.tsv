@@ -3613,3 +3613,21 @@ curves	Smooth	Wygładź
 	Recent document sizes	Ostatnie rozmiary dokumentów
 	Show canvas pattern	Pokaż wzór obszaru roboczego
 	Show rulers in new documents	Pokazuj linijki w nowych dokumentach
+	Generative Fill…	Wypełnienie generatywne…
+	Generative Fill	Wypełnienie generatywne
+	Prompt	Polecenie
+	Describe what should appear in the selection.	Opisz, co ma się pojawić w zaznaczeniu.
+	AI Horde	AI Horde
+	API key (optional)	Klucz API (opcjonalnie)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Pusty klucz oznacza dostęp anonimowy. Duże zaznaczenia są wysyłane w co najwyżej 1024 px.
+	Generative Fill needs a selection on a pixel layer	Wypełnienie generatywne wymaga zaznaczenia na warstwie pikselowej
+	enter a prompt describing what should appear	wpisz polecenie opisujące, co ma się pojawić
+	Generative Fill is only available in the desktop app.	Wypełnienie generatywne jest dostępne tylko w aplikacji na komputer.
+	Queued on AI Horde…	W kolejce AI Horde…
+	Waiting for an AI Horde worker…	Oczekiwanie na workera AI Horde…
+	Downloading result…	Pobieranie wyniku…
+	Transform On Drop	Przekształć po upuszczeniu
+	AI (AI Horde)	SI (AI Horde)
+	Hint (optional)	Wskazówka (opcjonalnie)
+	AI reconstructs the selection to match the surroundings.	SI odtwarza zaznaczenie tak, by pasowało do otoczenia.
+	AI Content-Aware Fill is only available in the desktop app.	Wypełnianie z uwzględnieniem zawartości SI jest dostępne tylko w aplikacji na komputer.

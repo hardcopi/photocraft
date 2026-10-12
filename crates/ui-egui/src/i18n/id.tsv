@@ -3027,3 +3027,21 @@ curves	Smooth	Haluskan
 	Recent document sizes	Ukuran dokumen terbaru
 	Show canvas pattern	Tampilkan pola kanvas
 	Show rulers in new documents	Tampilkan penggaris di dokumen baru
+	Generative Fill…	Isian generatif…
+	Generative Fill	Isian generatif
+	Prompt	Prompt
+	Describe what should appear in the selection.	Jelaskan apa yang harus muncul di seleksi.
+	AI Horde	AI Horde
+	API key (optional)	Kunci API (opsional)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Akses anonim dipakai jika kunci kosong. Seleksi besar dikirim hingga 1024 px.
+	Generative Fill needs a selection on a pixel layer	Isian generatif butuh seleksi pada layer piksel
+	enter a prompt describing what should appear	masukkan prompt yang menjelaskan apa yang harus muncul
+	Generative Fill is only available in the desktop app.	Isian generatif hanya tersedia di aplikasi desktop.
+	Queued on AI Horde…	Antri di AI Horde…
+	Waiting for an AI Horde worker…	Menunggu worker AI Horde…
+	Downloading result…	Mengunduh hasil…
+	Transform On Drop	Transformasi saat dilepas
+	AI (AI Horde)	AI (AI Horde)
+	Hint (optional)	Petunjuk (opsional)
+	AI reconstructs the selection to match the surroundings.	AI merekonstruksi seleksi agar cocok dengan sekitarnya.
+	AI Content-Aware Fill is only available in the desktop app.	Isian peka konten AI hanya tersedia di aplikasi desktop.

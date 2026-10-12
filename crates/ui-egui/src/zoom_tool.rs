@@ -244,6 +244,25 @@ mod tests {
     }
 
     #[test]
+    fn alt_click_zooms_out_even_when_the_click_event_omits_alt() {
+        // Xfce and similar desktops often deliver PointerButton with empty modifiers while Alt
+        // is still held (the Zoom-out cursor already follows `i.modifiers.alt`).
+        let mut h = harness(true, 1.0);
+        let p = h.state().last_canvas_rect.center();
+        let z0 = h.state().current_zoom();
+        let size = h.state().ui.views[0].doc_size;
+        h.event(Event::ModifiersChanged(egui::Modifiers::ALT));
+        h.event(Event::PointerMoved(p));
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.step();
+        h.run_steps(2);
+        assert_eq!(h.state().current_zoom(), crate::zoom_levels::step(z0, -1, size), "⌥-click must zoom out when the key is held");
+    }
+
+    #[test]
     fn zoom_rectangle_without_scrubby_zoom() {
         let mut h = harness(false, 1.0);
         let r = h.state().last_canvas_rect;
@@ -267,5 +286,18 @@ mod tests {
         // The rectangle's centre is now the view centre.
         let c = h.state().ui.views[0].center;
         assert!((c[0] as f64 - mid[0]).abs() < 1.0 && (c[1] as f64 - mid[1]).abs() < 1.0, "{c:?} vs {mid:?}");
+    }
+
+    #[test]
+    fn zoom_tool_draws_its_own_magnifier() {
+        let mut h = harness(true, 1.0);
+        let p = h.state().last_canvas_rect.center();
+        h.event(Event::PointerMoved(p));
+        h.step();
+        assert_eq!(
+            h.output().platform_output.cursor_icon,
+            egui::CursorIcon::None,
+            "the magnifier is drawn by PhotoCraft, not the OS cursor theme"
+        );
     }
 }

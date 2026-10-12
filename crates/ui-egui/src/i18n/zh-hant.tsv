@@ -2614,3 +2614,22 @@ curves	Smooth	平滑
 	Recent document sizes	最近的文件尺寸
 	Show canvas pattern	顯示畫布圖案
 	Show rulers in new documents	在新文件中顯示尺標
+	Generative Fill…	生成式填滿…
+	Generative Fill	生成式填滿
+	Prompt	提示
+	Describe what should appear in the selection.	描述選取範圍中應出現的內容。
+	AI Horde	AI Horde
+	API key (optional)	API 金鑰（選填）
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	金鑰為空時使用匿名存取。較大選取範圍最多以 1024 像素傳送。
+	Generative Fill needs a selection on a pixel layer	生成式填滿需要在像素圖層上建立選取範圍
+	enter a prompt describing what should appear	請輸入描述應出現內容的提示
+	Generative Fill is only available in the desktop app.	生成式填滿僅可在桌面應用程式中使用。
+	Queued on AI Horde…	正在排隊等待 AI Horde…
+	Waiting for an AI Horde worker…	正在等待 AI Horde 工作節點…
+	Downloading result…	正在下載結果…
+	Transform On Drop	放置時變換
+	AI (AI Horde)	AI（AI Horde）
+	Hint (optional)	提示（選填）
+	AI reconstructs the selection to match the surroundings.	AI 會依周圍內容重建選取範圍。
+	AI Content-Aware Fill is only available in the desktop app.	AI 內容感知填滿僅可在桌面應用程式中使用。
+	Method	方法

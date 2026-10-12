@@ -66,11 +66,11 @@ Right-click with a Marquee, Lasso, Polygonal Lasso, Magic Wand or Object Selecti
 | Store | Save Selection…; Make Work Path… | `select.saveSelection`; `select.toWorkPath` after a Tolerance dialog |
 | Layer | Layer via Copy; Layer via Cut; New Layer… | `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.new.layer` |
 | Transform | Free Transform; Transform Selection; Distort; Perspective | `edit.freeTransform`, `select.transformSelection`, `edit.transform.distort`, `edit.transform.perspective` |
-| Fill | Fill…; Stroke…; Content-Aware Fill… | `edit.fill`, `edit.stroke`, `edit.contentAwareFill` |
+| Fill | Fill…; Stroke…; Content-Aware Fill…; Generative Fill… | `edit.fill`, `edit.stroke`, `edit.contentAwareFill`, `edit.generativeFill` |
 | Filter | Last Filter | `filter.lastFilter` |
 | Fade | Fade… | `edit.fade` |
 
-Photoshop's Generative Fill and Delete and Fill Selection rows are left out: PhotoCraft has no such commands. With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
+Delete and Fill Selection is on the selection canvas menu (`edit.deleteAndFillSelection`). Generative Fill (this fork) sends the selection to AI Horde inpainting and places the result on a new layer. With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
 
 ## Panel and workspace matrix
 

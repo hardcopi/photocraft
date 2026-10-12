@@ -3612,3 +3612,22 @@ navigator	Zoom	Zvětšení
 	Recent document sizes	Nedávné velikosti dokumentů
 	Show canvas pattern	Zobrazit vzor plátna
 	Show rulers in new documents	Zobrazit pravítka v nových dokumentech
+	Generative Fill…	Generativní výplň…
+	Generative Fill	Generativní výplň
+	Prompt	Výzva
+	Describe what should appear in the selection.	Popište, co se má v výběru objevit.
+	AI Horde	AI Horde
+	API key (optional)	Klíč API (volitelné)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Bez klíče se použije anonymní přístup. Velké výběry se odesílají nejvýše v 1024 px.
+	Generative Fill needs a selection on a pixel layer	Generativní výplň potřebuje výběr na pixelové vrstvě
+	enter a prompt describing what should appear	zadejte výzvu popisující, co se má objevit
+	Generative Fill is only available in the desktop app.	Generativní výplň je dostupná jen v desktopové aplikaci.
+	Queued on AI Horde…	Ve frontě AI Horde…
+	Waiting for an AI Horde worker…	Čeká se na worker AI Horde…
+	Downloading result…	Stahování výsledku…
+	Transform On Drop	Transformovat po puštění
+	AI (AI Horde)	AI (AI Horde)
+	Hint (optional)	Nápověda (volitelné)
+	AI reconstructs the selection to match the surroundings.	AI zrekonstruuje výběr podle okolí.
+	AI Content-Aware Fill is only available in the desktop app.	AI vyplnění podle obsahu je k dispozici jen v desktopové aplikaci.
+	Method	Metoda

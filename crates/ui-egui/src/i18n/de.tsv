@@ -2672,3 +2672,21 @@ curves	Smooth	Glätten
 	Recent document sizes	Zuletzt verwendete Dokumentgrößen
 	Show canvas pattern	Canvas-Muster anzeigen
 	Show rulers in new documents	Lineale in neuen Dokumenten anzeigen
+	Generative Fill…	Generatives Füllen…
+	Generative Fill	Generatives Füllen
+	Prompt	Eingabe
+	Describe what should appear in the selection.	Beschreiben Sie, was in der Auswahl erscheinen soll.
+	AI Horde	AI Horde
+	API key (optional)	API-Schlüssel (optional)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Ohne Schlüssel wird anonymer Zugriff verwendet. Große Auswahlen werden mit höchstens 1024 px gesendet.
+	Generative Fill needs a selection on a pixel layer	Generatives Füllen braucht eine Auswahl auf einer Pixelebene
+	enter a prompt describing what should appear	geben Sie eine Eingabe ein, die beschreibt, was erscheinen soll
+	Generative Fill is only available in the desktop app.	Generatives Füllen ist nur in der Desktop-App verfügbar.
+	Queued on AI Horde…	In der AI-Horde-Warteschlange…
+	Waiting for an AI Horde worker…	Warten auf einen AI-Horde-Worker…
+	Downloading result…	Ergebnis wird heruntergeladen…
+	Transform On Drop	Beim Ablegen transformieren
+	AI (AI Horde)	KI (AI Horde)
+	Hint (optional)	Hinweis (optional)
+	AI reconstructs the selection to match the surroundings.	Die KI rekonstruiert die Auswahl passend zur Umgebung.
+	AI Content-Aware Fill is only available in the desktop app.	KI-inhaltsbasiertes Füllen ist nur in der Desktop-App verfügbar.

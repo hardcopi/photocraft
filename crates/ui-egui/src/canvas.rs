@@ -762,14 +762,24 @@ fn pointer_moves(events: &[egui::Event], button: egui::PointerButton, down_at_st
     out
 }
 
-/// Modifiers attached to the pointer event itself. Some input sources provide these without a
-/// separate `ModifiersChanged` event, so use them for click gestures before falling back to the
-/// frame-wide modifier state.
-fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton) -> Option<egui::Modifiers> {
-    events.iter().rev().find_map(|e| match e {
+/// Modifiers for a pointer-button gesture. The event's own field is filled in from the
+/// frame-wide key state: some Linux desktops (Xfce, Cinnamon) deliver the click with empty
+/// modifiers while Alt is still held, so the Zoom-out cursor would otherwise zoom in.
+fn pointer_button_modifiers(events: &[egui::Event], button: egui::PointerButton, frame: egui::Modifiers) -> egui::Modifiers {
+    let event = events.iter().rev().find_map(|e| match e {
         egui::Event::PointerButton { button: b, modifiers, .. } if *b == button => Some(*modifiers),
         _ => None,
-    })
+    });
+    match event {
+        Some(e) => egui::Modifiers {
+            alt: e.alt || frame.alt,
+            ctrl: e.ctrl || frame.ctrl,
+            shift: e.shift || frame.shift,
+            mac_cmd: e.mac_cmd || frame.mac_cmd,
+            command: e.command || frame.command,
+        },
+        None => frame,
+    }
 }
 
 /// Abstract tool event, produced by the mouse or by automation (`ui.pointer`).
@@ -3014,8 +3024,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         }
     } else if primary && !stroke_dismissal {
         let mods = ui.input(|i| i.modifiers);
-        // An ⌥-click the window manager took never arrives; say so (alt_grab.rs).
-        crate::alt_grab::watch(app, &ctx, egui::Id::new(("pc-alt-grab", idx)), rect, tool, !under_dialog);
+        // An ⌥-click the window manager took never arrives: Zoom-out still runs; other tools say so.
+        if let Some(p) = crate::alt_grab::watch(app, &ctx, egui::Id::new(("pc-alt-grab", idx)), rect, tool, !under_dialog) {
+            let nz = crate::zoom_levels::step(view.zoom, -1, view.doc_size);
+            let center = app.session.prefs().tools.zoom_clicked_point_to_center;
+            zoom_about(&mut view, &xf, p, nz, center, ppp);
+        }
         // Tools follow the left button; the right one opens the Brush Preset picker or erases
         // (Preferences › Tools, `paint_mouse`).
         crate::paint_mouse::sync_tool_brush(app);
@@ -3133,7 +3147,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         {
             let d = xf.to_doc(p);
             // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
-            let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
+            let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary, i.modifiers));
             tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
             app.press_stroke = app.drag.is_some();
         }
@@ -3243,7 +3257,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             && let Some(p) = response.interact_pointer_pos()
         {
             let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
-            let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
+            let click_mods = crate::workspace_ui::sticky_mods(app, ui.input(|i| pointer_button_modifiers(&i.events, click_button, i.modifiers)));
             let d = xf.to_doc(p);
             match tool {
                 Tool::Zoom => {
@@ -3560,13 +3574,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 // Dragging is handled with the pan itself, above.
                 Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
                 Tool::RotateView => crate::rotate_view::cursor(response.dragged()),
-                Tool::Zoom => {
-                    if zoom_out(alt) {
-                        egui::CursorIcon::ZoomOut
-                    } else {
-                        egui::CursorIcon::ZoomIn
-                    }
-                }
+                Tool::Zoom => zoom_cursor(ui.ctx(), p, zoom_out(alt || app.ui.shell.sticky_alt)),
                 Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => egui::CursorIcon::Text,
                 Tool::MagneticLasso => crate::magnetic_lasso_ui::cursor(app, &painter, p, xf.zoom),
                 Tool::RedEye => {
@@ -4374,6 +4382,15 @@ pub(crate) fn pipette_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
 pub(crate) fn paint_bucket_cursor(ctx: &egui::Context, p: Pos2) -> egui::CursorIcon {
     // The left corner of the icon's bucket is at (2, 12) of its 24-unit box.
     crate::icons::cursor(ctx, "paint-bucket", p, vec2(2.0, 12.0) / 24.0, 22.0);
+    egui::CursorIcon::None
+}
+
+/// Zoom tool cursor: PhotoCraft draws the magnifier itself. Linux cursor themes (XFCE/MX,
+/// Adwaita, DMZ) often have no `zoom-in` / `zoom-out`, so the OS `ZoomIn`/`ZoomOut` icons
+/// become the default arrow.
+pub(crate) fn zoom_cursor(ctx: &egui::Context, p: Pos2, out: bool) -> egui::CursorIcon {
+    let name = if out { "zoom-out" } else { "zoom-in" };
+    crate::icons::cursor(ctx, name, p, vec2(11.0, 11.0) / 24.0, 20.0);
     egui::CursorIcon::None
 }
 

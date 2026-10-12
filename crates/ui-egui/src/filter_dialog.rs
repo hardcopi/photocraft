@@ -526,7 +526,22 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if crate::select_mask_view::owns(f) {
         crate::select_mask_view::controls(ui, f);
     }
+    if cmd == crate::content_aware_fill_ui::COMMAND {
+        crate::content_aware_fill_ui::method_row(ui, f);
+    }
+    let caf_ai = crate::content_aware_fill_ui::is_ai(f);
+    if caf_ai {
+        f.remove("__preview");
+    } else if cmd == crate::content_aware_fill_ui::COMMAND {
+        f.insert("__preview".into(), json!(true));
+    }
     for p in parse_spec(&spec) {
+        if cmd == crate::content_aware_fill_ui::COMMAND && p.key == "method" {
+            continue;
+        }
+        if caf_ai && p.key != "output" {
+            continue;
+        }
         match p.kind {
             Kind::Range { min, max, default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
@@ -680,6 +695,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 f.insert(p.key, json!(v.round() as i64));
             }
         }
+    }
+    if crate::content_aware_fill_ui::is_ai(f) {
+        crate::content_aware_fill_ui::ai_body(ui, f);
     }
     // Read-only context the dialog opener supplies (e.g. the monitor profile in use).
     if let Some(note) = f.get("__note").and_then(Value::as_str) {

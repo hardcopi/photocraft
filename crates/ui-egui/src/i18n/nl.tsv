@@ -3762,3 +3762,21 @@ curves	Smooth	Vloeiend maken
 	Recent document sizes	Recente documentformaten
 	Show canvas pattern	Canvaspatroon tonen
 	Show rulers in new documents	Linialen tonen in nieuwe documenten
+	Generative Fill…	Generatief vullen…
+	Generative Fill	Generatief vullen
+	Prompt	Prompt
+	Describe what should appear in the selection.	Beschrijf wat er in de selectie moet verschijnen.
+	AI Horde	AI Horde
+	API key (optional)	API-sleutel (optioneel)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Zonder sleutel wordt anonieme toegang gebruikt. Grote selecties worden tot 1024 px verzonden.
+	Generative Fill needs a selection on a pixel layer	Generatief vullen vereist een selectie op een pixellaag
+	enter a prompt describing what should appear	voer een prompt in die beschrijft wat er moet verschijnen
+	Generative Fill is only available in the desktop app.	Generatief vullen is alleen beschikbaar in de desktop-app.
+	Queued on AI Horde…	In de wachtrij bij AI Horde…
+	Waiting for an AI Horde worker…	Wachten op een AI Horde-worker…
+	Downloading result…	Resultaat downloaden…
+	Transform On Drop	Transformeren bij neerzetten
+	AI (AI Horde)	AI (AI Horde)
+	Hint (optional)	Hint (optioneel)
+	AI reconstructs the selection to match the surroundings.	AI reconstrueert de selectie zodat die bij de omgeving past.
+	AI Content-Aware Fill is only available in the desktop app.	AI-inhoudsbewust vullen is alleen beschikbaar in de desktop-app.

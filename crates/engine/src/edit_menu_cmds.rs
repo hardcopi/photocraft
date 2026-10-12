@@ -352,8 +352,119 @@ fn delete_and_fill(s: &mut Session, _: &Value) -> Result<Value> {
     content_aware_fill_as(s, &json!({"sampling": "rectangular"}), "edit.deleteAndFillSelection", "Delete and Fill Selection")
 }
 
+fn has_generated_pixels(p: &Value) -> bool {
+    p.get("png").and_then(Value::as_str).is_some()
+        || p.get("webp").and_then(Value::as_str).is_some()
+        || p.get("rgba").and_then(Value::as_array).is_some()
+}
+
+fn remap_gen(cmd: &'static str, e: EngineError) -> EngineError {
+    match e {
+        EngineError::BadParams { msg, .. } => bad(cmd, msg),
+        other => other,
+    }
+}
+
+/// Place already-generated pixels into the selection (AI Horde result from the desktop dialog).
+fn apply_generated_content_aware(s: &mut Session, p: &Value, cmd: &'static str, label: &'static str) -> Result<Value> {
+    let id = pixel_layer(s).map_err(EngineError::Other)?;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let sel = st.doc.selection.clone().ok_or_else(|| bad(cmd, "no selection"))?;
+    let hb = sel.content_bounds().intersect(&st.doc.bounds());
+    if hb.is_empty() {
+        return Err(bad(cmd, "the selection is outside the canvas"));
+    }
+    let (w, h, px) = crate::generative_fill_cmds::decode_pixels(p).map_err(|e| remap_gen(cmd, e))?;
+    let (ox, oy) = crate::generative_fill_cmds::origin_xy(p, hb).map_err(|e| remap_gen(cmd, e))?;
+    let output = str_or(p, "output", "current").to_string();
+    if !matches!(output.as_str(), "current" | "new" | "duplicate") {
+        return Err(bad(cmd, "`output` must be current|new|duplicate"));
+    }
+    let iw = w as i32;
+    let ih = h as i32;
+    let window = Rect::new(ox, oy, ox.saturating_add(iw.max(0)), oy.saturating_add(ih.max(0)));
+    if window.width() != w || window.height() != h {
+        return Err(bad(cmd, "the generated image origin overflows the canvas"));
+    }
+    let region = window.intersect(&st.doc.bounds());
+    if region.is_empty() {
+        return Err(bad(cmd, "the generated image does not overlap the canvas"));
+    }
+    let (px, rw, rh) = crate::generative_fill_cmds::crop_to_region(px, w, window, region).map_err(|e| remap_gen(cmd, e))?;
+    let window = region;
+    let surf = st.doc.layer(id).and_then(|l| l.surface()).ok_or(EngineError::NoLayer(id))?;
+    let fmt = surf.format();
+    let n = fmt.channels();
+    let ww = rw as usize;
+    let hh = rh as usize;
+    let img = surf.read_region(window);
+    let mut cover = vec![0.0f32; ww.saturating_mul(hh)];
+    let mut hole = vec![false; ww.saturating_mul(hh)];
+    let mut filled = vec![0.0f32; ww.saturating_mul(hh).saturating_mul(n.max(1))];
+    for y in 0..hh {
+        for x in 0..ww {
+            let i = y.saturating_mul(ww).saturating_add(x);
+            let dx = window.x0.saturating_add(x as i32);
+            let dy = window.y0.saturating_add(y as i32);
+            let k = sel.sample_channel(dx, dy, 0).clamp(0.0, 1.0);
+            if let Some(slot) = cover.get_mut(i) {
+                *slot = k;
+            }
+            if let Some(slot) = hole.get_mut(i) {
+                *slot = k > 0.0;
+            }
+            let Some(src) = px.get(i) else { continue };
+            let mut enc = [0.0f32; 8];
+            from_rgba_into(&fmt, *src, &mut enc);
+            let di = i.saturating_mul(n);
+            if let (Some(dst), Some(enc_n)) = (filled.get_mut(di..di + n), enc.get(..n)) {
+                dst.copy_from_slice(enc_n);
+            }
+        }
+    }
+    let (bx0, by0, bx1, by1) = mask_bounds(ww, hh, &hole);
+    let original: Vec<f32> = (by0..by1)
+        .flat_map(|y| {
+            let start = (y.saturating_mul(ww).saturating_add(bx0)).saturating_mul(n);
+            let end = (y.saturating_mul(ww).saturating_add(bx1)).saturating_mul(n);
+            img.get(start..end).unwrap_or(&[]).iter().copied()
+        })
+        .collect();
+    let bw = bx1.saturating_sub(bx0);
+    let bh = by1.saturating_sub(by0);
+    let mut cover_bounds = vec![0.0f32; bw.saturating_mul(bh)];
+    for y in by0..by1 {
+        for x in bx0..bx1 {
+            let i = y.saturating_mul(ww).saturating_add(x);
+            let k = (y - by0).saturating_mul(bw).saturating_add(x - bx0);
+            if let (Some(dst), Some(&c)) = (cover_bounds.get_mut(k), cover.get(i)) {
+                *dst = c;
+            }
+        }
+    }
+    let n_hole = cover_bounds.iter().filter(|c| **c > 0.0).count();
+    apply_content_aware_fill(
+        s,
+        label,
+        id,
+        &output,
+        fmt,
+        window,
+        FilledWindow { filled, bounds: (bx0, by0, bx1, by1), original, cover: cover_bounds, n_hole },
+    )
+}
+
 fn content_aware_fill_as(s: &mut Session, p: &Value, cmd: &'static str, label: &'static str) -> Result<Value> {
     use photocraft_algo::content_aware::{FillOptions, auto_sampling_with, color_level, fill_owned, rotation_level};
+    if has_generated_pixels(p) {
+        return apply_generated_content_aware(s, p, cmd, label);
+    }
+    if str_or(p, "method", "contentAware") == "ai" {
+        return Err(bad(
+            cmd,
+            "AI fill needs generated pixels (`png`/`webp`/`rgba`); the desktop dialog sends them after AI Horde returns",
+        ));
+    }
     let id = pixel_layer(s).map_err(EngineError::Other)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
     let doc = st.doc.clone();
@@ -1444,7 +1555,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Content-Aware Fill…",
             ["Edit"],
             None,
-            r##"{"sampling":"auto|rectangular|custom","margin":px?,"area":[x,y,w,h]?,"channel":index|name?,"colorAdaptation":"default|none|high|veryHigh","rotationAdaptation":"none|low|medium|high|full","scale":bool=false,"mirror":bool=false,"output":"current|new|duplicate","seed":u64=1}"##,
+            r##"{"method":"contentAware|ai"=contentAware,"sampling":"auto|rectangular|custom","margin":px?,"area":[x,y,w,h]?,"channel":index|name?,"colorAdaptation":"default|none|high|veryHigh","rotationAdaptation":"none|low|medium|high|full","scale":bool=false,"mirror":bool=false,"output":"current|new|duplicate","seed":u64=1} AI fill: png/webp base64 or rgba+width/height, origin [x,y]"##,
             can_caf,
             content_aware_fill
         ),

@@ -118,15 +118,15 @@ pub(crate) fn interact(ui: &mut Ui, state: &mut CameraRawPreviewState, viewport:
             Some(crate::wheel_nav::Wheel::Pan(delta)) => state.pan(delta, viewport, size),
             None => {}
         }
-        response.clone().on_hover_cursor(if hand {
-            crate::tool_cursor::hand(ui.ctx(), false)
-        } else if !zoom_tool {
-            egui::CursorIcon::Crosshair
-        } else if modifiers.alt {
-            egui::CursorIcon::ZoomOut
+        if zoom_tool {
+            crate::canvas::zoom_cursor(ui.ctx(), at, modifiers.alt);
         } else {
-            egui::CursorIcon::ZoomIn
-        });
+            response.clone().on_hover_cursor(if hand {
+                crate::tool_cursor::hand(ui.ctx(), false)
+            } else {
+                egui::CursorIcon::Crosshair
+            });
+        }
     }
     let capture_id = response.id.with("zoom-capture");
     if response.drag_started_by(PointerButton::Primary) && zoom_tool {

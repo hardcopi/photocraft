@@ -3962,3 +3962,21 @@ navigator	Zoom	Zoom
 	Recent document sizes	Dimensioni documento recenti
 	Show canvas pattern	Mostra motivo area di lavoro
 	Show rulers in new documents	Mostra righelli nei nuovi documenti
+	Generative Fill…	Riempimento generativo…
+	Generative Fill	Riempimento generativo
+	Prompt	Prompt
+	Describe what should appear in the selection.	Descrivi cosa deve comparire nella selezione.
+	AI Horde	AI Horde
+	API key (optional)	Chiave API (facoltativa)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Senza chiave si usa l’accesso anonimo. Le selezioni grandi sono inviate al massimo a 1024 px.
+	Generative Fill needs a selection on a pixel layer	Il riempimento generativo richiede una selezione su un livello pixel
+	enter a prompt describing what should appear	inserisci un prompt che descriva cosa deve comparire
+	Generative Fill is only available in the desktop app.	Il riempimento generativo è disponibile solo nell’app desktop.
+	Queued on AI Horde…	In coda su AI Horde…
+	Waiting for an AI Horde worker…	In attesa di un worker AI Horde…
+	Downloading result…	Download del risultato…
+	Transform On Drop	Trasforma al rilascio
+	AI (AI Horde)	IA (AI Horde)
+	Hint (optional)	Suggerimento (facoltativo)
+	AI reconstructs the selection to match the surroundings.	L’IA ricostruisce la selezione in base all’ambiente.
+	AI Content-Aware Fill is only available in the desktop app.	Il riempimento in base al contenuto con IA è disponibile solo nell’app desktop.

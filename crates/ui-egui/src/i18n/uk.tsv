@@ -3700,3 +3700,21 @@ curves	Smooth	Згладити
 	Recent document sizes	Нещодавні розміри документів
 	Show canvas pattern	Показати візерунок полотна
 	Show rulers in new documents	Показувати лінійки в нових документах
+	Generative Fill…	Генеративна заливка…
+	Generative Fill	Генеративна заливка
+	Prompt	Запит
+	Describe what should appear in the selection.	Опишіть, що має з’явитися у виділенні.
+	AI Horde	AI Horde
+	API key (optional)	Ключ API (необов’язково)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Якщо ключ порожній, використовується анонімний доступ. Великі виділення надсилаються щонайбільше 1024 пікселі.
+	Generative Fill needs a selection on a pixel layer	Генеративна заливка потребує виділення на піксельному шарі
+	enter a prompt describing what should appear	введіть запит, що описує, що має з’явитися
+	Generative Fill is only available in the desktop app.	Генеративна заливка доступна лише в комп’ютерній програмі.
+	Queued on AI Horde…	У черзі AI Horde…
+	Waiting for an AI Horde worker…	Очікування воркера AI Horde…
+	Downloading result…	Завантаження результату…
+	Transform On Drop	Трансформувати після перетягування
+	AI (AI Horde)	ШІ (AI Horde)
+	Hint (optional)	Підказка (необов’язково)
+	AI reconstructs the selection to match the surroundings.	ШІ відновлює виділення за оточенням.
+	AI Content-Aware Fill is only available in the desktop app.	Заливка з урахуванням вмісту за допомогою ШІ доступна лише в комп’ютерній програмі.

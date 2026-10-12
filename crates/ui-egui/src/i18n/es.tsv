@@ -2699,3 +2699,23 @@ curves	Smooth	Suavizar
 	Recent document sizes	Tamaños de documento recientes
 	Show canvas pattern	Mostrar patrón del lienzo
 	Show rulers in new documents	Mostrar reglas en documentos nuevos
+	Color Burn (Paint.NET)	Sobreexponer color (Paint.NET)
+	Color Dodge (Paint.NET)	Aclarar color (Paint.NET)
+	Generative Fill…	Relleno generativo…
+	Generative Fill	Relleno generativo
+	Prompt	Indicación
+	Describe what should appear in the selection.	Describe lo que debe aparecer en la selección.
+	AI Horde	AI Horde
+	API key (optional)	Clave de API (opcional)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Si la clave está vacía se usa acceso anónimo. Las selecciones grandes se envían a 1024 px como máximo.
+	Generative Fill needs a selection on a pixel layer	El relleno generativo necesita una selección en una capa de píxeles
+	enter a prompt describing what should appear	escribe una indicación que describa lo que debe aparecer
+	Generative Fill is only available in the desktop app.	El relleno generativo solo está disponible en la aplicación de escritorio.
+	Queued on AI Horde…	En cola en AI Horde…
+	Waiting for an AI Horde worker…	Esperando un worker de AI Horde…
+	Downloading result…	Descargando el resultado…
+	Transform On Drop	Transformar al soltar
+	AI (AI Horde)	IA (AI Horde)
+	Hint (optional)	Pista (opcional)
+	AI reconstructs the selection to match the surroundings.	La IA reconstruye la selección para coincidir con el entorno.
+	AI Content-Aware Fill is only available in the desktop app.	El relleno según el contenido con IA solo está disponible en la app de escritorio.

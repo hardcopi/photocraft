@@ -189,6 +189,17 @@ fn an_alt_click_the_window_manager_took_says_so() {
 }
 
 #[test]
+fn a_stolen_alt_click_with_the_zoom_tool_zooms_out() {
+    let mut h = harness(two_colours());
+    h.state_mut().ui.tool = Tool::Zoom;
+    let z0 = h.state().current_zoom();
+    let size = h.state().ui.views[0].doc_size;
+    grabbed_alt_click(&mut h, 50.0, 50.0, true);
+    assert_ne!(h.state().ui.status, crate::alt_grab::message(), "Zoom-out should run instead of the desktop warning");
+    assert_eq!(h.state().current_zoom(), crate::zoom_levels::step(z0, -1, size));
+}
+
+#[test]
 fn leaving_the_window_without_a_grab_says_nothing() {
     // Alt+Tab to another window: the pointer comes back to an unfocused window.
     let mut h = harness(two_colours());

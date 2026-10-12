@@ -2,6 +2,23 @@
 
 PhotoCraft is an open-source, native, Photoshop-comparable image editor written in **Rust only** (no JavaScript or TypeScript). **No Tauri, Electron or webview shells:** the desktop app is native egui/eframe on wgpu, and the web build is the same Rust compiled to WebAssembly (trunk + wasm-bindgen). Never add Tauri (or any webview/JS UI framework) as a dependency, build step or packaging target. The product name is always written **PhotoCraft** (`{Function}Craft` in PascalCase, like its siblings ArtCraft, ArtCraftX, DesignCraft, VectorCraft, EffectCraft, FilmCraft, LightCraft, PdfCraft) in user-facing text: UI, window titles, About, installers, release names, docs prose. Machine names stay lowercase: crates (`photocraft-*`), binaries, file names, ids (`ai.storyteller.photocraft`). Standards and learnings shared across the crafting apps live in `../craftrules` (read its `README.md`; the repository is not public — outside contributors should ask a maintainer for the standards relevant to their change). Contribute reusable learnings there; shared Rust components live in [storytold/craft-libs](https://github.com/storytold/craft-libs) and are pinned by immutable git revision. UI libraries stay at L6. The goal is 1:1 Photoshop parity (same menus, shortcuts, behaviour and file fidelity) with better performance, and every feature drivable by agents. Read this file first, then `docs/`.
 
+## This checkout (hardcopi fork)
+
+This tree is Richard's fork at `/home/richard/code/photocraft`, remote `origin` → `git@github.com:hardcopi/photocraft.git`, branch `richard/features`. Upstream is `upstream` → `git@github.com:storytold/photocraft.git`. Independent features stay on this branch; do not merge upstream generative work (#41) unless asked.
+
+**Run everything as user `richard`.** The agent often runs as root: `~` and `$HOME` then point at `/root`. Always `sudo -u richard env HOME=/home/richard …` and use absolute `/home/richard/...` paths. Git author is Richard Lester `<rich@five-star.com>`. SSH to GitHub authenticates as `hardcopi`.
+
+- **Commit only when asked.** “Commit.” means a local commit on `richard/features`; “Commit and push” also pushes `origin richard/features`. Never commit `target-glibc235/` (untracked glibc-2.35 AppImage build dir).
+- **Do not run system `rustfmt` or `cargo fmt` on a whole crate.** Edition 2024 let-chains get rewritten and the crate fails to compile. Format only the files you changed, with the toolchain rustfmt (`source /home/richard/.cargo/env`).
+- **Version** lives only in `[workspace.package] version` (`cargo xtask version` / `cargo xtask version set X.Y.Z`). Packaging and AppImage names follow that. Current: **0.8.0**.
+- **Engine never talks HTTP.** Network I/O (AI Horde, downloads) lives in `ui-egui` behind `cfg(not(target_arch = "wasm32"))`. Engine commands apply already-generated pixels (`png`/`webp`/`rgba`).
+- **Generative Fill** (`edit.generativeFill`) and **Content-Aware Fill › Method AI** share the Horde inpaint client (`crates/ui-egui/src/horde.rs`). CAF PatchMatch stays the default. wasm greys AI; PatchMatch still works. Do not add an `ml` crate.
+- **Zoom tool:** PhotoCraft draws its own magnifier cursor (`zoom-in`/`zoom-out` SVGs). ⌥-click zooms out. On XFCE/Cinnamon the window manager often steals Alt+left; `alt_grab.rs` replays a short stolen click as zoom-out. Prefer Super as the desktop window-move key for eyedropper/clone ⌥-click.
+- **Launch (local Plasma Wayland, not CRD):** as `richard`, `DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`, `XDG_RUNTIME_DIR=/run/user/1000`, `DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus`, `--control 7878 --control-token-file /tmp/photocraft/control.token`. Ready when the log says `control server listening`. Kill: `pkill -u richard -x photocraft`. Logs: `/home/richard/.config/photocraft/logs/photocraft.log`, `/tmp/photocraft/run.log`.
+- **Debian/MX AppImage (glibc 2.35):** Docker image `photocraft-linux-glibc235`, script `/home/richard/code/photocraft-appimage-build/build.sh`, `CARGO_TARGET_DIR=/home/richard/code/photocraft/target-glibc235`. Copy `dist/release/photocraft-<ver>-linux-x86_64.AppImage` to `/home/richard/Downloads/` with `/bin/cp -f` (host `cp` is interactive). Verify `APPIMAGE_EXTRACT_AND_RUN=1 … --version`.
+- **wasm32** may be missing on this machine (`rustup target add wasm32-unknown-unknown` before `cargo xtask wasm`).
+- Integrations prefs stay hidden until implemented. API keys go in env (`AIHORDE_API_KEY`) or `prefs.dialogs`, never in the engine.
+
 ## 1. Orientation (5 minutes)
 
 | Read | Why |
@@ -65,10 +82,10 @@ People trust PhotoCraft with their work, and a crash loses it. A malformed file,
 4. **Tests are the gate.** Every change comes with tests. Format crates use round-trip, synthetic-generator, oracle and fuzz tests. Keep the PSD corpus results and the parity floor (`crates/ui-egui/src/parity.rs`) from regressing.
 5. **The UI is thin and data-driven.** UI state lives in `ui-egui/src/state.rs` (serde), so the control channel can read and drive it. Colours and radii come from `theme::Tokens`, never hard-coded.
 6. **Verify UI changes visually.** Render offscreen with `cargo run -p photocraft-ui-egui --example snapshot` (no window, no focus stealing), or launch with `--control` and take `ui.screenshot`. Look at the PNG. Demo images must be public-domain art, never personal photos. When fetching assets, never put a person's name, email or other personal details in requests (User-Agent, headers, URLs); use a generic `Photocraft-dev` User-Agent.
-7. **Never break wasm.** L0–L6 must `cargo check --target wasm32-unknown-unknown` (run `cargo xtask wasm`). File-system code is `cfg(not(target_arch = "wasm32"))` or goes through the platform services.
+7. **Never break wasm.** L0–L6 must `cargo check --target wasm32-unknown-unknown` (run `cargo xtask wasm`). File-system and HTTP code is `cfg(not(target_arch = "wasm32"))` or goes through the platform services.
 8. **Performance is a feature.** Benchmark heavy operations on a 24–36 MP image in release. Work per tile in parallel (rayon), skip empty tiles, never scan a full surface per frame (cache per revision), and record before/after timings in the dev log.
-
 9. **Never panic on input** (see *Never crash* above). A command's `run` closure and anything it calls must return `Err`, never panic, for *any* params or document state: validate params, check bounds before indexing or dividing, and reject absurd sizes before allocating. The `panic_hunt` integration test fuzzes every command with adversarial params and must stay green.
+10. **The engine does not call the network.** Commands take already-generated pixels or local params. Long network work is a UI `start_job` that then `execute`s the engine command. The engine crate has no HTTP client.
 
 ## 4. Picking work
 
@@ -122,7 +139,6 @@ Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still
 
 ## 7. Where things are tracked
 
-
 - `docs/roadmap.md`: milestones M0–M12, status and the current focus.
 - `ROADMAP.md`, `docs/target-app-parity.md`, `docs/gaps.md` and the `docs/*-parity.md` checklists: where we stand against Photoshop.
 - `docs/parity-checklist.md`: generated Photoshop menu coverage.
@@ -131,7 +147,6 @@ Then append a terse entry to `log/devlog.md` (what landed, numbers, what's still
 - `../craftrules/release/playbook.md`: how every storytold app builds signed release binaries (the canonical recipe; `docs/release-playbook.md` just points there); `docs/releasing.md` is PhotoCraft's specifics.
 - `plan/` (local, gitignored): research, parity plan, execution plan, estimates.
 - `log/` (local, gitignored): the dev log.
-- 
 
 ## 8. Keeping the native format complete
 

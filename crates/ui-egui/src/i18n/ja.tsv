@@ -3637,3 +3637,72 @@ curves	Smooth	スムーズ
 	Recent document sizes	最近のドキュメントサイズ
 	Show canvas pattern	キャンバスのパターンを表示
 	Show rulers in new documents	新規ドキュメントで定規を表示
+	Rule of Thirds	三分割法
+	Golden Ratio	黄金比
+	Golden Spiral	黄金螺旋
+	Auto Show Overlay	オーバーレイを自動表示
+	Always Show Overlay	オーバーレイを常に表示
+	Never Show Overlay	オーバーレイを表示しない
+	Cycle Overlay	オーバーレイを切り替え
+	Cycle Orientation	方向を切り替え
+	Set the overlay options for the Crop tool	切り抜きツールのオーバーレイオプションを設定
+	Alt-click went to the desktop, which moves windows with Alt-drag. Set its window-move key to Super, or latch Alt in Window › Modifier Keys.	Alt+クリックはデスクトップに取られました（Alt+ドラッグでウィンドウを移動する設定です）。デスクトップのウィンドウ移動キーを Super に変更するか、ウィンドウ › 修飾キーで Alt を固定してください。
+
+# Shared Layer Style color picker
+	Color Picker (Layer Style Color)	カラーピッカー（レイヤースタイルの色）
+	Auto Hide Notifications	通知を自動的に隠す
+	Notification Duration (seconds)	通知の表示時間（秒）
+	Appearance Mode	外観モード
+	Dark Theme	ダークテーマ
+	Light Theme	ライトテーマ
+	Pro Medium	Pro Medium
+	Studio Light	Studio Light
+	Next Appearance Mode	次の外観モード
+	Sync with system	システムと同期
+	Active	適用中
+	Color Picker (Solid Color)	カラーピッカー（べた塗り）
+	Straighten the image by drawing a line on it	画像上に線を描いて角度を補正
+	Set additional Crop options	切り抜きの追加オプションを設定
+	Show Cropped Area	切り抜かれた領域を表示
+	Enable Crop Shield	切り抜きシールドを有効にする
+	Match Canvas	カンバスに合わせる
+	Auto Adjust Opacity	不透明度を自動調整
+	Crop Shield color	切り抜きシールドのカラー
+	Color Picker (Crop Shield Color)	カラーピッカー（切り抜きシールドのカラー）
+	From Center	中心から
+	Link radii	半径をリンク
+	Star Ratio:	星の比率:
+	Create Rectangle	長方形を作成
+	Create Ellipse	楕円を作成
+	Create Triangle	三角形を作成
+	Create Polygon	多角形を作成
+	Some brush presets could not be loaded	一部のブラシプリセットを読み込めませんでした
+	Retry saving presets	プリセットの保存を再試行
+	Brush preset changes are not saved: {error}	ブラシプリセットの変更は保存されていません：{error}
+	Keep this tab open to retain your brushes.	ブラシを保持するには、このタブを開いたままにしてください。
+	Browser storage is unavailable; brushes are session-only. Keep this tab open to retain them.	ブラウザーのストレージを利用できないため、ブラシはこのセッション中のみ有効です。保持するには、このタブを開いたままにしてください。
+	Saving brush presets… Keep this tab open until saving finishes.	ブラシプリセットを保存中… 保存が完了するまでこのタブを開いたままにしてください。
+	Reflect	反射
+	Glow	グロー
+	Negation	否定
+	XOR	XOR
+	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
+	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+	Generative Fill…	生成塗りつぶし…
+	Generative Fill	生成塗りつぶし
+	Prompt	プロンプト
+	Describe what should appear in the selection.	選択範囲に表示する内容を説明してください。
+	AI Horde	AI Horde
+	API key (optional)	API キー（任意）
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	キーが空のときは匿名アクセスを使います。大きな選択範囲は最大 1024 px で送信されます。
+	Generative Fill needs a selection on a pixel layer	生成塗りつぶしには、ピクセルレイヤー上の選択範囲が必要です
+	enter a prompt describing what should appear	表示する内容を説明するプロンプトを入力してください
+	Generative Fill is only available in the desktop app.	生成塗りつぶしはデスクトップアプリでのみ利用できます。
+	Queued on AI Horde…	AI Horde のキュー待ち…
+	Waiting for an AI Horde worker…	AI Horde のワーカーを待っています…
+	Downloading result…	結果をダウンロードしています…
+	Transform On Drop	ドロップ時に変形
+	AI (AI Horde)	AI（AI Horde）
+	Hint (optional)	ヒント（任意）
+	AI reconstructs the selection to match the surroundings.	AI は周囲に合わせて選択範囲を再構成します。
+	AI Content-Aware Fill is only available in the desktop app.	AI によるコンテンツに応じた塗りつぶしはデスクトップアプリでのみ利用できます。

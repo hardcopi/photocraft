@@ -7,8 +7,9 @@
 //! the app can win that grab back, but its signature is clear: the pointer "leaves" the window from
 //! well inside the canvas while ⌥ is held with a tool whose ⌥-click matters (X11 and Wayland report
 //! a grab as the pointer leaving), and comes back to a window that still has the keyboard focus
-//! when the button is released. The status bar then says what happened and how to get ⌥-click
-//! back. An Alt+Tab away leaves the window without focus, so it never shows the message.
+//! when the button is released. The Zoom tool treats a short grab (pointer returns near where it
+//! left) as the ⌥-click that was stolen and zooms out. Other tools show how to get ⌥-click back.
+//! An Alt+Tab away leaves the window without focus, so it never shows the message.
 
 use egui::{Context, Event, Id, Pos2, Rect};
 
@@ -18,6 +19,9 @@ use crate::state::Tool;
 /// How far inside the canvas the pointer must be for a "leave" to count as a grab rather than
 /// the pointer moving off the window.
 const MARGIN: f32 = 8.0;
+
+/// Pointer back this close to where it left: a click, not an Alt-drag that moved the window.
+const CLICK: f32 = 24.0;
 
 /// Per canvas view: where ⌥ was last held over it, and whether a grab is waiting for the pointer
 /// to come back.
@@ -39,24 +43,35 @@ pub(crate) fn message() -> &'static str {
 
 /// Watch one canvas view's frame for an ⌥-click the window manager grabbed. `rect` is the view's
 /// canvas area, `tool` the tool in effect, `active` false while a dialog owns the canvas.
-pub(crate) fn watch(app: &mut PhotocraftApp, ctx: &Context, id: Id, rect: Rect, tool: Tool, active: bool) {
+///
+/// Returns the press point when the Zoom tool should zoom out for the stolen click.
+pub(crate) fn watch(app: &mut PhotocraftApp, ctx: &Context, id: Id, rect: Rect, tool: Tool, active: bool) -> Option<Pos2> {
     let (gone, hover, mods, down, focused) =
         ctx.input(|i| (i.events.iter().any(|e| matches!(e, Event::PointerGone)), i.pointer.hover_pos(), i.modifiers, i.pointer.any_down(), i.focused));
     let mut w = ctx.data(|d| d.get_temp::<Watch>(id)).unwrap_or_default();
     if gone && w.armed.is_some() {
         w.pending = true;
     }
+    let mut replay = None;
     if w.pending
         && let Some(p) = hover
         && rect.contains(p)
     {
         w.pending = false;
         if focused && active {
-            app.ui.status = message().into();
-            app.ui.status_error = true;
+            if tool == Tool::Zoom && w.armed.is_some_and(|a| a.distance(p) <= CLICK) {
+                replay = w.armed;
+            } else {
+                app.ui.status = message().into();
+                app.ui.status_error = true;
+            }
         }
     }
-    // Only the physical key: a latched Window › Modifier Keys ⌥ isn't held on the keyboard.
-    w.armed = hover.filter(|p| active && !gone && !down && rect.shrink(MARGIN).contains(*p) && alt_click_tool(tool, mods) && !mods.command);
+    // Keep the press point while the grab is in flight: PointerGone would otherwise clear it.
+    if !w.pending {
+        // Only the physical key: a latched Window › Modifier Keys ⌥ isn't held on the keyboard.
+        w.armed = hover.filter(|p| active && !gone && !down && rect.shrink(MARGIN).contains(*p) && alt_click_tool(tool, mods) && !mods.command);
+    }
     ctx.data_mut(|d| d.insert_temp(id, w));
+    replay
 }

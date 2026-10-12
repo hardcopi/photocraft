@@ -655,7 +655,7 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(10.0);
-        let msg = if j.message.is_empty() || j.message == j.label { tl!("Working…").to_string() } else { j.message.clone() };
+        let msg = if j.message.is_empty() || j.message == j.label { tl!("Working…").to_string() } else { tl!(&j.message).to_string() };
         ui.label(RichText::new(msg).color(t.text_dim));
         ui.add_space(8.0);
         let (br, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());

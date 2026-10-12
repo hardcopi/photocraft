@@ -114,6 +114,9 @@ pub fn disabled_for_selection(doc: &Document, selected: &[LayerId], active: Opti
 }
 
 pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
+    if cfg!(target_arch = "wasm32") && id == "edit.generativeFill" {
+        return true;
+    }
     let Some(st) = app.session.active() else { return false };
     let active = st.active_layer.and_then(|a| st.doc.layer(a));
     // Free Transform Path works on the Background too: it moves the path, not the pixels.

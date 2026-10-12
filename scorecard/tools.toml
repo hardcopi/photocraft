@@ -213,7 +213,7 @@ id = "TOOL-214-15"
 target = "Content-Aware Fill workspace: paint the sampling area, preview, rotate/scale/mirror, new layer"
 status = "partial"
 issue = 214
-note = "Engine sampling auto, rect, custom (edit_menu_cmds.rs:324); generic dialog. CAF is a modal dialog, not a sampling-area workspace"
+note = "Engine sampling auto, rect, custom (edit_menu_cmds.rs); generic dialog plus Fill method Content-Aware (PatchMatch) or AI (AI Horde inpaint, desktop). CAF is a modal dialog, not a sampling-area workspace"
 
 [[item]]
 id = "TOOL-214-16"

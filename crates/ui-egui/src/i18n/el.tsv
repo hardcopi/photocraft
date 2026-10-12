@@ -3704,3 +3704,21 @@ curves	Smooth	Εξομάλυνση
 	Recent document sizes	Πρόσφατα μεγέθη εγγράφων
 	Show canvas pattern	Εμφάνιση μοτίβου καμβά
 	Show rulers in new documents	Εμφάνιση χαράκων σε νέα έγγραφα
+	Generative Fill…	Γενετικό γέμισμα…
+	Generative Fill	Γενετικό γέμισμα
+	Prompt	Προτροπή
+	Describe what should appear in the selection.	Περιγράψτε τι πρέπει να εμφανιστεί στην επιλογή.
+	AI Horde	AI Horde
+	API key (optional)	Κλειδί API (προαιρετικό)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Χωρίς κλειδί χρησιμοποιείται ανώνυμη πρόσβαση. Οι μεγάλες επιλογές στέλνονται έως 1024 px.
+	Generative Fill needs a selection on a pixel layer	Το γενετικό γέμισμα απαιτεί επιλογή σε επίπεδο εικονοστοιχείων
+	enter a prompt describing what should appear	εισάγετε μια προτροπή που περιγράφει τι πρέπει να εμφανιστεί
+	Generative Fill is only available in the desktop app.	Το γενετικό γέμισμα είναι διαθέσιμο μόνο στην εφαρμογή επιφάνειας εργασίας.
+	Queued on AI Horde…	Σε ουρά στο AI Horde…
+	Waiting for an AI Horde worker…	Αναμονή για worker του AI Horde…
+	Downloading result…	Λήψη αποτελέσματος…
+	Transform On Drop	Μετασχηματισμός κατά την απόθεση
+	AI (AI Horde)	ΤΝ (AI Horde)
+	Hint (optional)	Υπόδειξη (προαιρετικό)
+	AI reconstructs the selection to match the surroundings.	Η ΤΝ ανασυνθέτει την επιλογή ώστε να ταιριάζει με το περιβάλλον.
+	AI Content-Aware Fill is only available in the desktop app.	Η συμπλήρωση με επίγνωση περιεχομένου ΤΝ είναι διαθέσιμη μόνο στην εφαρμογή για υπολογιστή.

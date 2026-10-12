@@ -866,16 +866,19 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &V
             }
             dialog(d)
         }
+        "edit.generativeFill" => crate::generative_fill_ui::invoke(app, params),
         "edit.contentAwareFill" => {
             if !app.session.is_enabled(id) {
                 return Some(Err("Content-Aware Fill needs a selection on a pixel layer".into()));
             }
             let d = crate::filter_dialog::open(app, id);
+            let saved = app.session.prefs().dialogs.get(id).cloned();
             if let Some(dm) = d.and_then(|d| app.ui.dialog_mut(d)) {
                 dm.fields.insert("__preview".into(), json!(true));
                 for k in ["margin", "seed", "channel"] {
                     dm.fields.remove(k);
                 }
+                crate::content_aware_fill_ui::hydrate_from(saved.as_ref(), &mut dm.fields);
             }
             dialog(d)
         }

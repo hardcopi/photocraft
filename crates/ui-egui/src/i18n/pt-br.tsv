@@ -3792,3 +3792,21 @@ layerLabel	No Color	Sem cor
 	Recent document sizes	Tamanhos de documento recentes
 	Show canvas pattern	Mostrar padrão da tela
 	Show rulers in new documents	Mostrar réguas em novos documentos
+	Generative Fill…	Preenchimento generativo…
+	Generative Fill	Preenchimento generativo
+	Prompt	Prompt
+	Describe what should appear in the selection.	Descreva o que deve aparecer na seleção.
+	AI Horde	AI Horde
+	API key (optional)	Chave de API (opcional)
+	Anonymous access is used when the key is empty. Large selections are sent at up to 1024 px.	Sem chave, o acesso anônimo é usado. Seleções grandes são enviadas com no máximo 1024 px.
+	Generative Fill needs a selection on a pixel layer	O preenchimento generativo precisa de uma seleção em uma camada de pixels
+	enter a prompt describing what should appear	digite um prompt descrevendo o que deve aparecer
+	Generative Fill is only available in the desktop app.	O preenchimento generativo está disponível apenas no aplicativo para computador.
+	Queued on AI Horde…	Na fila do AI Horde…
+	Waiting for an AI Horde worker…	Aguardando um worker do AI Horde…
+	Downloading result…	Baixando o resultado…
+	Transform On Drop	Transformar ao soltar
+	AI (AI Horde)	IA (AI Horde)
+	Hint (optional)	Dica (opcional)
+	AI reconstructs the selection to match the surroundings.	A IA reconstrói a seleção para combinar com o entorno.
+	AI Content-Aware Fill is only available in the desktop app.	O preenchimento ciente de conteúdo com IA só está disponível no aplicativo para computador.
